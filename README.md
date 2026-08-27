@@ -2,6 +2,8 @@
 
 A .NET 10 web proxy that translates between Ollama API format and LM Studio API format, enabling Ollama clients to work with locally-hosted LLMs via LM Studio.
 
+> **Note:** This proxy is designed to run **locally** on a developer machine. It binds to `0.0.0.0:11434` by default for convenience with local tooling (Ollama CLI, VS Code, Copilot), but has no authentication, rate limiting, or production hardening. Do not expose it to untrusted networks.
+
 ## Features
 
 - **Ollama API compatibility**: Supports `/api/tags`, `/api/show`, `/api/ps`, `/api/chat`, `/api/generate`, `/api/embeddings`
