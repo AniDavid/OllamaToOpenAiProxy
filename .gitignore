@@ -1,24 +1,29 @@
-# .NET specific
-[
-/bin/,
-/obj/,
-/packages/,
-*.user,
-*.suo,
-*.userosscache,
-*.sln.DotSettings.user,
-*.user,
-*.WebApplication,
-*.User
+# Bin and Obj (compiled output)
+/bin/
+/obj/
 
-# Visual Studio
+# User secrets and config
+*.user
+*.userosscache
+*.suo
+*.sln.DotSettings.user
+
+# IDE
 .vs/
-
-# LM Studio proxy specific
-appsettings.Development.json
-*.pem
-*.key
+.swo/
+*.ntdll
 
 # Runtime
 *.runtimeconfig.json
 *.deps.json
+
+# Packages
+/packages/
+
+# OpenAI keys / secrets
+*.pem
+*.key
+.env
+
+# LM Studio proxy specific
+appsettings.Development.json
