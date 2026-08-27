@@ -1,0 +1,24 @@
+# .NET specific
+[
+/bin/,
+/obj/,
+/packages/,
+*.user,
+*.suo,
+*.userosscache,
+*.sln.DotSettings.user,
+*.user,
+*.WebApplication,
+*.User
+
+# Visual Studio
+.vs/
+
+# LM Studio proxy specific
+appsettings.Development.json
+*.pem
+*.key
+
+# Runtime
+*.runtimeconfig.json
+*.deps.json
