@@ -7,8 +7,8 @@ A .NET 10 web proxy that translates between Ollama API format and LM Studio API 
 - **Ollama API compatibility**: Supports `/api/tags`, `/api/show`, `/api/ps`, `/api/chat`, `/api/generate`, `/api/embeddings`
 - **OpenAI-compatible endpoints**: `/v1/chat/completions`, `/v1/completions`, `/v1/models`, `/v1/embeddings`
 - **Model mapping**: Automatic model name matching and conversion between LM Studio metadata → Ollama format
-- **Streaming support: Both NDJSON and text/event-streaming modes
-- **CORS enabled for public access
+- **Streaming support**: Both NDJSON and text/event-streaming modes
+- **CORS enabled for public access**
 - **Model fuzzy matching**: Fuzzy model name matching with `:latest` suffix handling
 
 ## Prerequisites
@@ -83,7 +83,34 @@ The proxy will be available at `http://<ProxyHost>:<ProxyPort>` by default (`htt
 - `GET /v1/models/{id}` - Get specific model
 - `POST /v1/embeddings`
 
-### Contributing
+## Docker Deployment
+
+### Build and run with Docker
+
+```bash
+# Build the image
+docker build -t ollama-lmstudio-proxy .
+
+# Run the proxy (default port 11434)
+docker run -d -p 11434:11434 --name ollama-lmstudio-proxy ollama-lmstudio-proxy
+```
+
+Or using docker compose:
+
+```yaml
+version: '3.8'
+services:
+  ollama-lmstudio-proxy:
+    image: ollama-lmstudio-proxy
+    ports:
+      - "11434:11434"
+    environment:
+      - ProxySettings__LmStudioUrl=http://host.docker.internal:1234
+      - ProxySettings__ProxyHost=0.0.0.0
+      - ProxySettings__ProxyPort=11434
+```
+
+## Contributing
 
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feature/foo`
