@@ -1048,3 +1048,5 @@ app.MapPost("/v1/embeddings", async (HttpContext ctx) =>
 //  RUN SERVER on configured Host and Port
 // ---------------------------------------------------------
 app.Run(proxyUrl);
+
+public partial class Program { }

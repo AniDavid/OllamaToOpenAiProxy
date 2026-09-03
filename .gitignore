@@ -1,29 +1,60 @@
-# Bin and Obj (compiled output)
-/bin/
-/obj/
+# Build results
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+publish/
 
-# User secrets and config
+# Visual Studio & VS Code & JetBrains
+.vs/
+.vscode/
+.idea/
 *.user
 *.userosscache
 *.suo
+*.userprefs
+*.sln.docstates
 *.sln.DotSettings.user
-
-# IDE
-.vs/
-.swo/
+*.swp
+*.swo
+*~
 *.ntdll
 
-# Runtime
+# Testing & Code Coverage
+[Tt]est[Rr]esults/
+*.coverage
+*.coveragexml
+*.msCoverageSourceRootsMapping*
+CoverletSourceRootsMapping*
+coverage.opencover.xml
+coverage.cobertura.xml
+
+# Runtime & Dependency metadata
 *.runtimeconfig.json
 *.deps.json
+project.lock.json
+project.assets.json
 
-# Packages
-/packages/
+# NuGet Packages
+*.nupkg
+*.snupkg
+packages/
 
-# OpenAI keys / secrets
+# Environment Variables & Secrets
+.env
+.env.*
+!.env.example
 *.pem
 *.key
-.env
+*.pfx
+*.cer
 
-# LM Studio proxy specific
+# Application specific configurations
 appsettings.Development.json
+appsettings.Local.json
+appsettings.*.local.json
+
+# OS generated files
+.DS_Store
+Thumbs.db
+ehthumbs.db
