@@ -4,6 +4,7 @@
 [Ll]og/
 [Ll]ogs/
 publish/
+*.zip
 
 # Visual Studio & VS Code & JetBrains
 .vs/
