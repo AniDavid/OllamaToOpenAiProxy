@@ -4,8 +4,9 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.Configuration;
 
-namespace OllamaToLmStudioProxy.Tests;
+namespace OllamaToOpenAiProxy.Tests;
 
 public class IntegrationTests : IClassFixture<WebApplicationFactory<Program>>
 {
@@ -13,7 +14,14 @@ public class IntegrationTests : IClassFixture<WebApplicationFactory<Program>>
 
     public IntegrationTests(WebApplicationFactory<Program> factory)
     {
-        _client = factory.CreateClient();
+        _client = factory.WithWebHostBuilder(builder =>
+        {
+            builder.UseSetting("ProxySettings:OpenAiUrl", "http://127.0.0.1:19191");
+            builder.UseSetting("ProxySettings:LmStudioUrl", "http://127.0.0.1:19191");
+            builder.UseSetting("ProxySettings:EnableLogging", "false");
+            builder.UseSetting("OPENAI_URL", "http://127.0.0.1:19191");
+            builder.UseSetting("LMSTUDIO_URL", "http://127.0.0.1:19191");
+        }).CreateClient();
     }
 
     [Fact]

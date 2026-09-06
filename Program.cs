@@ -1,4 +1,4 @@
-using OllamaToLmStudioProxy;
+using OllamaToOpenAiProxy;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -23,7 +23,13 @@ builder.Services.AddCors(options =>
 // ---------------------------------------------------------
 var configSection = builder.Configuration.GetSection("ProxySettings");
 
-string lmStudioUrl = configSection["LmStudioUrl"]
+string targetUrl = configSection["OpenAiUrl"]
+    ?? configSection["BackendUrl"]
+    ?? configSection["TargetUrl"]
+    ?? configSection["LmStudioUrl"]
+    ?? builder.Configuration["OpenAiUrl"]
+    ?? builder.Configuration["BackendUrl"]
+    ?? builder.Configuration["TargetUrl"]
     ?? builder.Configuration["LmStudioUrl"]
     ?? "http://localhost:1234";
 
@@ -51,13 +57,13 @@ app.UseCors();
 
 var http = new HttpClient
 {
-    BaseAddress = new Uri(lmStudioUrl),
+    BaseAddress = new Uri(targetUrl),
     Timeout = TimeSpan.FromSeconds(timeoutSeconds)
 };
 
 Console.WriteLine("=================================================");
-Console.WriteLine("  Ollama & OpenAI to LM Studio Proxy");
-Console.WriteLine($"  Target LM Studio: {lmStudioUrl}");
+Console.WriteLine("  Ollama to OpenAI-Compatible Proxy");
+Console.WriteLine($"  Target API:       {targetUrl}");
 Console.WriteLine($"  Listening on:     {proxyUrl}");
 Console.WriteLine($"  Timeout:          {timeoutSeconds}s");
 Console.WriteLine($"  Logging:          {(enableLogging ? "Enabled" : "Disabled")}");
@@ -173,7 +179,7 @@ async Task<List<JsonObject>> GetLmStudioModelsAsync()
 // ---------------------------------------------------------
 //  Model Matching Helper
 // ---------------------------------------------------------
-JsonObject? MatchModel(List<JsonObject> models, string requestedName)
+JsonObject? MatchModel(List<JsonObject> models, string requestedName, bool allowFallback = true)
 {
     if (models.Count == 0) return null;
 
@@ -203,8 +209,8 @@ JsonObject? MatchModel(List<JsonObject> models, string requestedName)
     });
     if (match != null) return match;
 
-    // 4. Default to first model if available
-    return models.FirstOrDefault();
+    // 4. Default to first model if fallback is allowed
+    return allowFallback ? models.FirstOrDefault() : null;
 }
 
 //
@@ -483,14 +489,25 @@ app.MapPost("/api/chat", async (HttpContext ctx) =>
     if (!stream)
     {
         // Non-streaming mode
-        var resp = await http.PostAsync("/v1/chat/completions",
-            new StringContent(lmReq.ToJsonString(), Encoding.UTF8, "application/json"));
+        HttpResponseMessage resp;
+        try
+        {
+            resp = await http.PostAsync("/v1/chat/completions",
+                new StringContent(lmReq.ToJsonString(), Encoding.UTF8, "application/json"));
+        }
+        catch (Exception ex)
+        {
+            LoggerUtility.LogMessage(enableLogging, $"[ERROR] Failed to send /api/chat to backend: {ex.Message}");
+            ctx.Response.StatusCode = 502;
+            await ctx.Response.WriteAsJsonAsync(new JsonObject { ["error"] = ex.Message });
+            return;
+        }
 
         string respContent = await resp.Content.ReadAsStringAsync();
         if (!resp.IsSuccessStatusCode)
         {
             if (enableLogging)
-                Console.WriteLine($"[ERROR] LM Studio returned error: {resp.StatusCode} - {respContent}");
+                Console.WriteLine($"[ERROR] Backend returned error: {resp.StatusCode} - {respContent}");
             ctx.Response.StatusCode = (int)resp.StatusCode;
             await ctx.Response.WriteAsync(respContent);
             return;
@@ -654,8 +671,19 @@ app.MapPost("/api/generate", async (HttpContext ctx) =>
 
     if (!stream)
     {
-        var resp = await http.PostAsync("/v1/completions",
-            new StringContent(lmReq.ToJsonString(), Encoding.UTF8, "application/json"));
+        HttpResponseMessage resp;
+        try
+        {
+            resp = await http.PostAsync("/v1/completions",
+                new StringContent(lmReq.ToJsonString(), Encoding.UTF8, "application/json"));
+        }
+        catch (Exception ex)
+        {
+            LoggerUtility.LogMessage(enableLogging, $"[ERROR] Failed to send /api/generate to backend: {ex.Message}");
+            ctx.Response.StatusCode = 502;
+            await ctx.Response.WriteAsJsonAsync(new JsonObject { ["error"] = ex.Message });
+            return;
+        }
 
         string respContent = await resp.Content.ReadAsStringAsync();
         if (!resp.IsSuccessStatusCode)
@@ -771,8 +799,19 @@ async Task HandleEmbeddingsAsync(HttpContext ctx)
         ["input"] = input?.DeepClone()
     };
 
-    var resp = await http.PostAsync("/v1/embeddings",
-        new StringContent(lmReq.ToJsonString(), Encoding.UTF8, "application/json"));
+    HttpResponseMessage resp;
+    try
+    {
+        resp = await http.PostAsync("/v1/embeddings",
+            new StringContent(lmReq.ToJsonString(), Encoding.UTF8, "application/json"));
+    }
+    catch (Exception ex)
+    {
+        LoggerUtility.LogMessage(enableLogging, $"[ERROR] Failed to send /api/embeddings to backend: {ex.Message}");
+        ctx.Response.StatusCode = 502;
+        await ctx.Response.WriteAsJsonAsync(new JsonObject { ["error"] = ex.Message });
+        return;
+    }
 
     string respContent = await resp.Content.ReadAsStringAsync();
     if (!resp.IsSuccessStatusCode)
@@ -846,7 +885,7 @@ async Task HandleOpenAiChatCompletionsAsync(HttpContext ctx)
 
     bool stream = reqJson.TryGetPropertyValue("stream", out var s) && s!.GetValue<bool>();
 
-    LoggerUtility.LogMessage(enableLogging, $"[INFO] /v1/chat/completions forwarding to LM Studio (model: '{targetModel}', stream: {stream})");
+    LoggerUtility.LogMessage(enableLogging, $"[INFO] /v1/chat/completions forwarding to backend (model: '{targetModel}', stream: {stream})");
 
     var req = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
     {
@@ -855,7 +894,19 @@ async Task HandleOpenAiChatCompletionsAsync(HttpContext ctx)
 
     if (!stream)
     {
-        var resp = await http.SendAsync(req);
+        HttpResponseMessage resp;
+        try
+        {
+            resp = await http.SendAsync(req);
+        }
+        catch (Exception ex)
+        {
+            LoggerUtility.LogMessage(enableLogging, $"[ERROR] Failed to send /v1/chat/completions to backend: {ex.Message}");
+            ctx.Response.StatusCode = 502;
+            await ctx.Response.WriteAsJsonAsync(new JsonObject { ["error"] = ex.Message });
+            return;
+        }
+
         string respContent = await resp.Content.ReadAsStringAsync();
         ctx.Response.StatusCode = (int)resp.StatusCode;
         ctx.Response.Headers.ContentType = "application/json";
@@ -932,7 +983,19 @@ async Task HandleOpenAiCompletionsAsync(HttpContext ctx)
 
     if (!stream)
     {
-        var resp = await http.SendAsync(req);
+        HttpResponseMessage resp;
+        try
+        {
+            resp = await http.SendAsync(req);
+        }
+        catch (Exception ex)
+        {
+            LoggerUtility.LogMessage(enableLogging, $"[ERROR] Failed to send /v1/completions to backend: {ex.Message}");
+            ctx.Response.StatusCode = 502;
+            await ctx.Response.WriteAsJsonAsync(new JsonObject { ["error"] = ex.Message });
+            return;
+        }
+
         string respContent = await resp.Content.ReadAsStringAsync();
         ctx.Response.StatusCode = (int)resp.StatusCode;
         ctx.Response.Headers.ContentType = "application/json";
@@ -981,7 +1044,7 @@ async Task HandleOpenAiModelsAsync(HttpContext ctx)
             ["id"] = id,
             ["object"] = "model",
             ["created"] = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-            ["owned_by"] = "ollama-lmstudio-proxy"
+            ["owned_by"] = "ollama-openai-proxy"
         });
     }
 
@@ -1003,7 +1066,7 @@ app.MapGet("/models", HandleOpenAiModelsAsync);
 app.MapGet("/v1/models/{**id}", async (HttpContext ctx, string id) =>
 {
     var lmModels = await GetLmStudioModelsAsync();
-    var matched = MatchModel(lmModels, id);
+    var matched = MatchModel(lmModels, id, allowFallback: false);
     string modelId = matched?["key"]?.ToString() ?? matched?["id"]?.ToString() ?? id;
 
     ctx.Response.Headers.ContentType = "application/json";
@@ -1012,7 +1075,7 @@ app.MapGet("/v1/models/{**id}", async (HttpContext ctx, string id) =>
         ["id"] = modelId,
         ["object"] = "model",
         ["created"] = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-        ["owned_by"] = "ollama-lmstudio-proxy"
+        ["owned_by"] = "ollama-openai-proxy"
     });
 });
 
@@ -1035,8 +1098,19 @@ app.MapPost("/v1/embeddings", async (HttpContext ctx) =>
     string targetModel = matched?["key"]?.ToString() ?? matched?["id"]?.ToString() ?? reqModel;
     reqJson["model"] = targetModel;
 
-    var resp = await http.PostAsync("/v1/embeddings",
-        new StringContent(reqJson.ToJsonString(), Encoding.UTF8, "application/json"));
+    HttpResponseMessage resp;
+    try
+    {
+        resp = await http.PostAsync("/v1/embeddings",
+            new StringContent(reqJson.ToJsonString(), Encoding.UTF8, "application/json"));
+    }
+    catch (Exception ex)
+    {
+        LoggerUtility.LogMessage(enableLogging, $"[ERROR] Failed to send /v1/embeddings to backend: {ex.Message}");
+        ctx.Response.StatusCode = 502;
+        await ctx.Response.WriteAsJsonAsync(new JsonObject { ["error"] = ex.Message });
+        return;
+    }
 
     ctx.Response.StatusCode = (int)resp.StatusCode;
     ctx.Response.Headers.ContentType = "application/json";

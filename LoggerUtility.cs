@@ -1,4 +1,4 @@
-namespace OllamaToLmStudioProxy
+namespace OllamaToOpenAiProxy
 {
     public static class LoggerUtility
     {

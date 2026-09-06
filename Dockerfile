@@ -5,16 +5,16 @@ EXPOSE 80
 
 FROM mcr.microsoft.com/dotnet/net:10.0-sdk AS build
 WORKDIR /src
-COPY ["OllamaToLmStudioProxy.csproj", "."]
-RUN dotnet restore "./OllamaToLmStudioProxy.csproj"
+COPY ["OllamaToOpenAiProxy.csproj", "."]
+RUN dotnet restore "./OllamaToOpenAiProxy.csproj"
 COPY . .
 WORKDIR "/src"
-RUN dotnet build "OllamaToLmStudioProxy.csproj" -c Release -o /app/build
+RUN dotnet build "OllamaToOpenAiProxy.csproj" -c Release -o /app/build
 
 FROM build AS publish
-RUN dotnet publish "OllamaToLmStudioProxy.csproj" -c Release -o /app/publish /p:PublishTrimmed=false
+RUN dotnet publish "OllamaToOpenAiProxy.csproj" -c Release -o /app/publish /p:PublishTrimmed=false
 
 FROM base AS final
 WORKDIR /app
 COPY --from=publish /app/publish .
-ENTRYPOINT ["dotnet", "OllamaToLmStudioProxy.dll"]
+ENTRYPOINT ["dotnet", "OllamaToOpenAiProxy.dll"]

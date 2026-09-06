@@ -1,6 +1,6 @@
-using OllamaToLmStudioProxy;
+using OllamaToOpenAiProxy;
 
-namespace OllamaToLmStudioProxy.Tests;
+namespace OllamaToOpenAiProxy.Tests;
 
 public class LoggerUtilityTests
 {

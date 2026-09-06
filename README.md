@@ -1,303 +1,165 @@
-# OllamaToLmStudioProxy
+# OllamaToOpenAiProxy
 
-[GitHub](https://github.com/AniDavid/OllamaToLmStudioProxy) · [Releases](https://github.com/AniDavid/OllamaToLmStudioProxy/releases)
+[![CI](https://github.com/AniDavid/OllamaToOpenAiProxy/actions/workflows/ci.yml/badge.svg)](https://github.com/AniDavid/OllamaToOpenAiProxy/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![.NET](https://img.shields.io/badge/.NET-10.0-purple.svg)](https://dotnet.microsoft.com/download/dotnet/10.0)
 
-### Use your existing LM Studio models with Visual Studio — without installing Ollama
+[GitHub Repository](https://github.com/AniDavid/OllamaToOpenAiProxy) · [Releases](https://github.com/AniDavid/OllamaToOpenAiProxy/releases) · [Report Issue](https://github.com/AniDavid/OllamaToOpenAiProxy/issues)
 
-**OllamaToLmStudioProxy** is a lightweight .NET proxy that translates **Ollama API requests into LM Studio API requests**.
+### Bridge Ollama-compatible clients to any OpenAI-compatible API backend — without installing Ollama
 
-It was created to solve a simple problem:
-
-> **I wanted to use local LLMs in Visual Studio, but I already had my models downloaded and configured in LM Studio. I didn't want to install Ollama and maintain a second model environment.**
-
-Instead of downloading the models again or maintaining both Ollama and LM Studio, this proxy allows Visual Studio's Ollama integration to communicate with LM Studio.
-
-```text
-┌─────────────────────┐
-│    Visual Studio    │
-│                     │
-│   Ollama Provider   │
-└──────────┬──────────┘
-           │
-           │ Ollama API
-           ▼
-┌────────────────────────────┐
-│   OllamaToLmStudioProxy    │
-│                            │
-│   Ollama API → LM Studio   │
-└─────────────┬──────────────┘
-              │
-              │ LM Studio API
-              ▼
-┌─────────────────────┐
-│      LM Studio     │
-│                     │
-│  Your existing     │
-│      models         │
-└─────────────────────┘
-```
-
-## Why use this?
-
-If you already use **LM Studio**, you may already have several gigabytes of LLMs downloaded and configured.
-
-Installing Ollama just to satisfy an application that expects an Ollama-compatible API can mean:
-
-* Installing another LLM runtime
-* Downloading models again
-* Maintaining two model environments
-* Using additional disk space
-* Managing models in two different applications
-
-This proxy provides an alternative:
-
-```text
-Without the proxy:
-
-Visual Studio
-      │
-      ▼
-   Ollama
-      │
-      ▼
-Download / maintain models separately
-
-
-With OllamaToLmStudioProxy:
-
-Visual Studio
-      │
-      ▼
-OllamaToLmStudioProxy
-      │
-      ▼
-  LM Studio
-      │
-      ▼
-Existing models
-```
-
-**Ollama is not required.**
-
-The proxy does not run an LLM itself. LM Studio remains responsible for loading and running the model.
+**OllamaToOpenAiProxy** is a high-performance, lightweight .NET proxy that translates **Ollama API requests into OpenAI-compatible API requests**. It enables seamless integration with backends such as **LM Studio**, **FreeToken**, **vLLM**, **llama.cpp server**, **LocalAI**, **LiteLLM**, and any standard OpenAI API provider.
 
 ---
 
-## Main Use Case: Visual Studio + LM Studio
+## Why Use This?
 
-The original purpose of this project is to allow **Visual Studio** to use LM Studio through its Ollama-compatible local model integration.
-
-Visual Studio communicates with the proxy using the Ollama API:
+Many developer tools (like Visual Studio, Open WebUI, Continue.dev, AnythingLLM, and LangChain) have built-in support for Ollama. However, if you already manage your models in an OpenAI-compatible runtime like **LM Studio** or use an API provider like **FreeToken**, you shouldn't have to install and maintain a separate Ollama instance.
 
 ```text
-Visual Studio
-      │
-      │ http://localhost:11434
-      ▼
-OllamaToLmStudioProxy
-      │
-      │ http://localhost:1234
-      ▼
-LM Studio
+Without OllamaToOpenAiProxy:
+
+Ollama Client / Visual Studio
+            │
+            ▼
+         Ollama ──▶ Downloads & duplicates models on disk
+            │
+            ▼
+   Ollama Model Store
+
+
+With OllamaToOpenAiProxy:
+
+Ollama Client / Visual Studio
+            │
+            │ Ollama API (/api/chat, /api/tags, etc.)
+            ▼
+   OllamaToOpenAiProxy
+            │
+            │ OpenAI API (/v1/chat/completions, /v1/models, etc.)
+            ▼
+OpenAI-Compatible Backend (LM Studio, FreeToken, vLLM, llama.cpp, etc.)
+            │
+            ▼
+      Existing Models
 ```
 
-From Visual Studio's perspective, it is communicating with an Ollama-compatible server.
-
-From LM Studio's perspective, it is receiving requests through its local API.
-
-No Ollama installation is required.
+**Key Advantages:**
+- **No Ollama installation needed**: Reuse existing models and save gigabytes of disk space.
+- **Universal compatibility**: Works with any tool that expects an Ollama endpoint on port `11434`.
+- **Flexible backends**: Connects to LM Studio, FreeToken, vLLM, llama.cpp server, LocalAI, or cloud OpenAI providers.
+- **Ultra-fast & lightweight**: Built on .NET 10 minimal APIs with minimal overhead and streaming support.
 
 ---
 
-## Features
+## Architecture & Data Flow
 
-* **Ollama API compatibility** — `/api/tags`, `/api/show`, `/api/chat`, `/api/generate`, `/api/embeddings`
-* **OpenAI API compatibility** — `/v1/chat/completions`, `/v1/models`, `/v1/embeddings`
-* **Model management** — Model discovery, name matching, `:latest` suffix handling
-* **Streaming** — NDJSON and SSE support
-* **Local-only** — No auth, no cloud, runs on your machine
-* **.NET 10, Docker support**
+```text
+┌───────────────────────────────────────┐
+│     Client (Ollama Integration)       │
+│  Visual Studio / Open WebUI / etc.    │
+└──────────────────┬────────────────────┘
+                   │
+                   │ Ollama Protocol (e.g. POST /api/chat, GET /api/tags)
+                   ▼
+┌───────────────────────────────────────┐
+│          OllamaToOpenAiProxy          │
+│       Listening on 0.0.0.0:11434      │
+│                                       │
+│  • Model name & tag normalization     │
+│  • Streaming translation (NDJSON↔SSE) │
+│  • Schema translation & error handler │
+└──────────────────┬────────────────────┘
+                   │
+                   │ OpenAI Protocol (POST /v1/chat/completions, GET /v1/models)
+                   ▼
+┌───────────────────────────────────────┐
+│      OpenAI-Compatible Backend        │
+│   LM Studio / FreeToken / vLLM / etc. │
+│        (e.g. localhost:1234)          │
+└───────────────────────────────────────┘
+```
 
 ---
 
 ## Supported APIs
 
-### Ollama API
+### 1. Ollama Endpoints
 
-The proxy implements Ollama-compatible endpoints including:
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/` | Root health check ("Ollama is running") |
+| `GET` | `/api/version` | Returns Ollama API version compatibility |
+| `GET` / `POST` | `/api/tags` | Lists available models in Ollama JSON format |
+| `GET` / `POST` | `/api/ps` | Lists active/running models |
+| `GET` / `POST` | `/api/show` | Returns detailed model metadata (modelfile, template, params) |
+| `POST` | `/api/chat` | Native Ollama chat completion (streaming NDJSON & non-streaming) |
+| `POST` | `/api/generate` | Text completion (streaming NDJSON & non-streaming) |
+| `POST` | `/api/embeddings` | Vector embeddings endpoint |
+| `POST` | `/api/embed` | Batch vector embeddings endpoint |
+| `POST` | `/api/pull` | Compatibility endpoint simulating model pull progress |
 
-| Method | Endpoint          | Description            |
-| ------ | ----------------- | ---------------------- |
-| GET    | `/api/tags`       | List available models  |
-| POST   | `/api/show`       | Get model information  |
-| GET    | `/api/ps`         | List running models    |
-| POST   | `/api/chat`       | Chat completion        |
-| POST   | `/api/generate`   | Text generation        |
-| POST   | `/api/embeddings` | Generate embeddings    |
-| POST   | `/api/pull`       | Compatibility endpoint |
+### 2. OpenAI-Compatible Endpoints
 
-The exact behavior of individual endpoints depends on the corresponding functionality available from LM Studio.
-
-### OpenAI-compatible API
-
-The proxy also exposes OpenAI-compatible endpoints:
-
-| Method | Endpoint               | Description           |
-| ------ | ---------------------- | --------------------- |
-| GET    | `/v1/models`           | List models           |
-| GET    | `/v1/models/{id}`      | Get model information |
-| POST   | `/v1/chat/completions` | Chat completion       |
-| POST   | `/v1/completions`      | Text completion       |
-| POST   | `/v1/embeddings`       | Generate embeddings   |
-
-This makes the proxy useful for applications that support either Ollama or OpenAI-compatible local APIs.
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/v1/models` | Lists models in OpenAI format (`/models` alias supported) |
+| `GET` | `/v1/models/{id}` | Retrieves specific model information |
+| `POST` | `/v1/chat/completions` | OpenAI chat completions (SSE streaming & JSON) |
+| `POST` | `/v1/completions` | OpenAI text completions (SSE streaming & JSON) |
+| `POST` | `/v1/embeddings` | OpenAI vector embeddings |
 
 ---
 
 ## Quick Start
 
 ### Requirements
+- [.NET 10 SDK or Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) (Windows, Linux, macOS)
+- An OpenAI-compatible backend (e.g. [LM Studio](https://lmstudio.ai/), FreeToken, vLLM, llama.cpp server)
 
-* Windows, Linux, or another platform supported by .NET 10
-* [.NET 10](https://dotnet.microsoft.com/download/dotnet/10.0)
-* [LM Studio](https://lmstudio.ai/)
-* At least one model downloaded in LM Studio
+### 1. Start Your Target Backend
+- **LM Studio**: Open LM Studio, load your desired model, and start the local server (default: `http://localhost:1234`).
+- **FreeToken / Other**: Ensure your endpoint URL and API access are available.
 
-**Ollama is NOT required.**
+### 2. Start OllamaToOpenAiProxy
+Download the release binary or run from source:
 
----
-
-### 1. Start LM Studio
-
-Open LM Studio and load the model you want to use.
-
-Start the LM Studio local server.
-
-The default LM Studio API endpoint is:
-
-```text
-http://localhost:1234
+```bash
+# Run executable
+./OllamaToOpenAiProxy.exe
 ```
 
-If you are using a different port, change the proxy configuration accordingly.
+By default, the proxy listens on `http://0.0.0.0:11434` and forwards requests to `http://localhost:1234`.
 
----
+### 3. Configure Your Application
 
-### 2. Start OllamaToLmStudioProxy
+#### Visual Studio (Local Models)
+1. In Visual Studio, navigate to Copilot / Local Model settings.
+2. Select **Ollama** as the local provider.
+3. Set the endpoint to `http://localhost:11434`.
 
-Download the latest release from the [GitHub Releases page](https://github.com/AniDavid/OllamaToLmStudioProxy/releases).
-
-Run:
-
-```text
-OllamaToLmStudioProxy.exe
-```
-
-The proxy listens on:
-
-```text
-http://localhost:11434
-```
-
-This is the default port normally used by Ollama.
-
----
-
-### 3. Configure Visual Studio
-
-Configure Visual Studio to use its Ollama local model provider.
-
-Point it to:
-
-```text
-http://localhost:11434/v1
-```
-
-The proxy will receive the requests and forward them to LM Studio.
-
-You can then use the models already available in LM Studio.
-
----
-
-## Example
-
-Suppose LM Studio has the following model loaded:
-
-```text
-qwen/qwen3-coder
-```
-
-Visual Studio sends an Ollama/OpenAI-compatible request to:
-
-```text
-http://localhost:11434/v1/chat/completions
-```
-
-The proxy translates the request and forwards it to LM Studio:
-
-```text
-http://localhost:1234/v1/chat/completions
-```
-
-The response is then returned to Visual Studio.
-
-The application flow is therefore:
-
-```text
-┌──────────────┐
-│ Visual Studio│
-└──────┬───────┘
-       │
-       │ Ollama/OpenAI API
-       ▼
-┌──────────────────────┐
-│ OllamaToLmStudioProxy│
-└──────────┬───────────┘
-           │
-           │ LM Studio API
-           ▼
-┌──────────────────────┐
-│      LM Studio       │
-└──────────┬───────────┘
-           │
-           ▼
-      Local LLM
-```
-
----
-
-## Model Matching
-
-Different applications can use slightly different model-name formats.
-
-For example, a client may request:
-
-```text
-qwen3-coder:latest
-```
-
-while LM Studio reports:
-
-```text
-qwen/qwen3-coder
-```
-
-The proxy includes model-name matching logic to make these differences easier to handle.
-
-This is particularly useful when an application expects Ollama-style model names while LM Studio uses its own model identifiers.
+#### Open WebUI / Continue.dev / AnythingLLM
+- Set the Ollama base URL to `http://localhost:11434`.
 
 ---
 
 ## Configuration
 
-Configuration can be controlled through `appsettings.json`.
+Configuration can be customized via `appsettings.json`, environment variables, or `.env` files.
 
-Example:
+### `appsettings.json` Example
 
 ```json
 {
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "AllowedHosts": "*",
   "ProxySettings": {
-    "LmStudioUrl": "http://localhost:1234",
+    "OpenAiUrl": "http://localhost:1234",
     "ProxyHost": "0.0.0.0",
     "ProxyPort": 11434,
     "TimeoutSeconds": 600,
@@ -306,271 +168,91 @@ Example:
 }
 ```
 
-### Configuration options
+### Environment Variables
 
-| Setting          | Default                 | Description                        |
-| ---------------- | ----------------------- | ---------------------------------- |
-| `LmStudioUrl`    | `http://localhost:1234` | LM Studio API URL                  |
-| `ProxyHost`      | `0.0.0.0`               | Address on which the proxy listens |
-| `ProxyPort`      | `11434`                 | Proxy listening port               |
-| `TimeoutSeconds` | `600`                   | HTTP request timeout               |
-| `EnableLogging`  | `true`                  | Enable application logging         |
-
----
-
-## Local-only Configuration
-
-If the proxy is only required by applications running on the same computer, it is recommended to bind it to localhost:
-
-```json
-{
-  "ProxySettings": {
-    "ProxyHost": "127.0.0.1"
-  }
-}
-```
-
-The proxy will then only accept connections from the local machine.
+| Variable | Appsettings Key | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `OPENAI_URL` | `ProxySettings:OpenAiUrl` | `http://localhost:1234` | Target OpenAI API URL (LM Studio, FreeToken, etc.) |
+| `LMSTUDIO_URL` | `ProxySettings:LmStudioUrl` | `http://localhost:1234` | Alias for `OPENAI_URL` (backward compatibility) |
+| `PROXY_HOST` | `ProxySettings:ProxyHost` | `0.0.0.0` | Host address the proxy binds to |
+| `PROXY_PORT` | `ProxySettings:ProxyPort` | `11434` | Port the proxy listens on |
+| `TIMEOUT_SECONDS`| `ProxySettings:TimeoutSeconds` | `600` | HTTP request timeout in seconds |
+| `ENABLE_LOGGING` | `ProxySettings:EnableLogging` | `true` | Enables console request/response logging |
 
 ---
 
-## Docker
+## Model Matching & Normalization
 
-The proxy can also be run in Docker.
+Different clients and backends use different naming conventions for models. OllamaToOpenAiProxy handles these differences automatically:
 
-Build the image:
+1. **Exact match**: Direct match against model `id` or `key`.
+2. **`:latest` tag stripping**: If a client requests `qwen3-coder:latest`, the proxy matches it to `qwen3-coder` or `qwen/qwen3-coder`.
+3. **Substring matching**: Matches `qwen` with `qwen/qwen3-coder-30b`.
+4. **Fallback handling**: Automatically falls back to the loaded model for general chat/completions requests when no exact match is found.
+
+---
+
+## Docker Support
+
+Run with Docker:
 
 ```bash
-docker build -t ollama-lmstudio-proxy .
-```
+# Build Docker image
+docker build -t ollama-openai-proxy .
 
-Run it:
-
-```bash
+# Run container (connecting to host machine backend)
 docker run -d \
   -p 11434:11434 \
-  --name ollama-lmstudio-proxy \
-  ollama-lmstudio-proxy
-```
-
-When LM Studio is running on the host machine, Docker Desktop can normally reach it using:
-
-```text
-http://host.docker.internal:1234
-```
-
-Configure the proxy accordingly.
-
-For example:
-
-```json
-{
-  "ProxySettings": {
-    "LmStudioUrl": "http://host.docker.internal:1234"
-  }
-}
+  -e OPENAI_URL="http://host.docker.internal:1234" \
+  --name ollama-openai-proxy \
+  ollama-openai-proxy
 ```
 
 ---
 
 ## Building from Source
 
-Clone the repository:
-
 ```bash
-git clone https://github.com/AniDavid/OllamaToLmStudioProxy.git
+# 1. Clone repository
+git clone https://github.com/AniDavid/OllamaToOpenAiProxy.git
+cd OllamaToOpenAiProxy
+
+# 2. Build solution
+dotnet build OllamaToOpenAiProxy.slnx
+
+# 3. Run unit & integration tests
+dotnet test OllamaToOpenAiProxy.slnx
+
+# 4. Run application
+dotnet run --project OllamaToOpenAiProxy.csproj
 ```
-
-Enter the directory:
-
-```bash
-cd OllamaToLmStudioProxy
-```
-
-Build:
-
-```bash
-dotnet build
-```
-
-Run:
-
-```bash
-dotnet run
-```
-
-The project targets **.NET 10**.
-
----
-
-## Use Cases
-
-Although the project was originally created for Visual Studio, it can also be useful whenever an application expects an Ollama-compatible API but you prefer to run your models through LM Studio.
-
-For example:
-
-```text
-Ollama-compatible application
-             │
-             ▼
-OllamaToLmStudioProxy
-             │
-             ▼
-          LM Studio
-```
-
-This allows you to keep LM Studio as your model runtime while providing an Ollama-compatible interface to applications that expect it.
-
----
-
-## Why not just install Ollama?
-
-You can.
-
-This project is not intended to replace Ollama.
-
-The purpose is to provide an alternative for people who already use LM Studio and don't want to maintain another model runtime.
-
-If you already have your preferred models downloaded in LM Studio, the proxy lets you reuse them instead of setting up a separate Ollama environment.
-
----
-
-## Security
-
-This application is primarily intended for local development.
-
-The default configuration may listen on:
-
-```text
-0.0.0.0:11434
-```
-
-The proxy does **not** provide:
-
-* Authentication
-* Authorization
-* Rate limiting
-* TLS termination
-* Production-grade network security
-
-Do not expose the proxy directly to an untrusted network or the Internet.
-
-If you only need local access, use:
-
-```text
-127.0.0.1
-```
-
-as the proxy host.
-
----
-
-## Limitations
-
-The proxy translates API requests; it does not attempt to reproduce the complete Ollama runtime.
-
-LM Studio remains responsible for:
-
-* Loading models
-* Running inference
-* GPU/CPU utilization
-* Model configuration
-* Context size
-* Sampling parameters
-* Model lifecycle
-
-Some Ollama-specific functionality may therefore not have a direct equivalent in LM Studio.
 
 ---
 
 ## Troubleshooting
 
-### Visual Studio cannot connect
+### Client cannot connect to port 11434
+- Verify that a native Ollama daemon is not already running on port `11434`.
+- Check if firewall rules permit local connections on port `11434`.
 
-Check that:
+### Model Not Found / 400 Bad Request
+- Check the model list returned by `http://localhost:11434/api/tags` or `http://localhost:11434/v1/models`.
+- Verify that your backend (e.g. LM Studio) has the model loaded and the server active.
 
-1. LM Studio is running.
-2. A model is loaded in LM Studio.
-3. The LM Studio server is running.
-4. OllamaToLmStudioProxy is running.
-5. Port `11434` is not already being used by another application.
-6. Visual Studio is configured to use:
-
-```text
-http://localhost:11434/v1
-```
+### Target Backend Connection Refused (502 Bad Gateway)
+- Ensure the target server (LM Studio, FreeToken, etc.) is running at the configured `OpenAiUrl`.
+- When running in Docker, ensure you use `http://host.docker.internal:1234` instead of `localhost:1234`.
 
 ---
 
-### The model is not found
+## Security
 
-Check the model list exposed by the proxy:
-
-```text
-http://localhost:11434/v1/models
-```
-
-or:
-
-```text
-http://localhost:11434/api/tags
-```
-
-Compare the model identifier returned by the proxy with the model name expected by the client.
-
----
-
-### LM Studio cannot be reached
-
-Check that LM Studio's local server is running and verify the configured URL.
-
-Default:
-
-```text
-http://localhost:1234
-```
-
-If the proxy is running inside Docker, remember that `localhost` refers to the Docker container, not the host machine.
-
-Use:
-
-```text
-http://host.docker.internal:1234
-```
-
-when appropriate.
-
----
-
-## Contributing
-
-Contributions, bug reports, and suggestions are welcome.
-
-If you find an API compatibility problem with a particular Ollama client, please open an issue and include:
-
-* The client/application
-* The endpoint being called
-* The request, if possible
-* The response/error
-* Relevant proxy log output
-* The LM Studio version
-
----
-
-## Project Status
-
-This project was created to solve a specific practical problem:
-
-> **Use LM Studio's existing local models from Visual Studio without installing Ollama.**
-
-It is intentionally lightweight and focuses on API compatibility rather than implementing another LLM runtime.
-
-If you find it useful, consider giving the project a ⭐ on GitHub. It helps other developers discover the project.
+This application is designed for local development and proxying:
+- To restrict access strictly to the local machine, set `ProxyHost` to `127.0.0.1`.
+- Do not expose the proxy directly to public untrusted networks without appropriate reverse-proxy authentication, rate limiting, and TLS termination.
 
 ---
 
 ## License
 
-MIT License
-
-Copyright (c) 2026 AniDavid
+MIT License — Copyright (c) 2026 AniDavid. See [LICENSE](file:///d:/Projects/OllamaToLmStudioProxy/LICENSE) for details.

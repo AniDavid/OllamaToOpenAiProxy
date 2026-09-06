@@ -1,4 +1,4 @@
-﻿namespace OllamaToLmStudioProxy.Tests;
+namespace OllamaToOpenAiProxy.Tests;
 
 public class UnitTest1
 {
