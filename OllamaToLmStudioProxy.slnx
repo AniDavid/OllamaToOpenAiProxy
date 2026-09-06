@@ -1,6 +1,0 @@
-<Solution>
-  <Folder Name="/Tests/">
-    <Project Path="Tests/OllamaToLmStudioProxy.Tests.csproj" />
-  </Folder>
-  <Project Path="OllamaToLmStudioProxy.csproj" />
-</Solution>
