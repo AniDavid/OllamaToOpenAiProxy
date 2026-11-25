@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags: [ "v*" ]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Test
+        run: dotnet test --configuration Release
+
+      - name: Publish and zip
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          for rid in win-x64 linux-x64 osx-arm64; do
+            dotnet publish OllamaToOpenAiProxy.csproj -c Release -r $rid --self-contained \
+              -p:PublishSingleFile=true -p:DebugType=none -p:Version=$version -o publish/$rid
+            (cd publish/$rid && zip -r ../../OllamaToOpenAiProxy-$rid.zip .)
+          done
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Re-runs or hand-made releases: upload to the existing release instead of failing.
+        run: |
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" OllamaToOpenAiProxy-*.zip --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" --generate-notes OllamaToOpenAiProxy-*.zip
+          fi
+
+  winget:
+    needs: release
+    runs-on: windows-latest
+    steps:
+      # Opens a PR to microsoft/winget-pkgs; needs a classic PAT (public_repo) in WINGET_TOKEN
+      # and a fork of winget-pkgs under the token owner's account.
+      - uses: vedantmgoyal9/winget-releaser@v2
+        with:
+          identifier: AniDavid.OllamaToOpenAiProxy
+          release-tag: ${{ github.ref_name }}
+          installers-regex: '-win-x64\.zip$'
+          token: ${{ secrets.WINGET_TOKEN }}

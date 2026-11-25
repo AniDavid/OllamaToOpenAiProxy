@@ -4,7 +4,26 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-var builder = WebApplication.CreateBuilder(args);
+// winget starts the exe through a symlink in WinGet\Links, so resolve the real install folder.
+string? linkTarget = Environment.ProcessPath is { } exePath ? File.ResolveLinkTarget(exePath, true)?.FullName : null;
+string installDir = linkTarget is null ? AppContext.BaseDirectory : Path.GetDirectoryName(linkTarget)!;
+
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = args, ContentRootPath = installDir });
+
+// Config precedence (low → high): install-dir appsettings.json, %APPDATA%\OllamaToOpenAiProxy\appsettings.json
+// (survives winget upgrades), then env vars and command-line args. The working directory is not read: started from
+// another project's folder, the proxy would pick up that project's settings.
+var configSources = builder.Configuration.Sources;
+int afterFiles = configSources.ToList().FindLastIndex(s => s is Microsoft.Extensions.Configuration.FileConfigurationSource) + 1;
+// No reload: settings are read once at startup, and a watcher would cover all of %APPDATA% when the folder is missing.
+var userConfig = new Microsoft.Extensions.Configuration.Json.JsonConfigurationSource
+{
+    Path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "OllamaToOpenAiProxy", "appsettings.json"),
+    Optional = true,
+    ReloadOnChange = false,
+};
+userConfig.ResolveFileProvider();
+configSources.Insert(afterFiles, userConfig);
 
 // Add CORS support
 builder.Services.AddCors(options =>
@@ -21,35 +40,20 @@ builder.Services.AddCors(options =>
 // ---------------------------------------------------------
 //  Load Configuration from appsettings.json / ProxySettings
 // ---------------------------------------------------------
-var configSection = builder.Configuration.GetSection("ProxySettings");
+var cfg = builder.Configuration;
 
-string targetUrl = configSection["OpenAiUrl"]
-    ?? configSection["BackendUrl"]
-    ?? configSection["TargetUrl"]
-    ?? configSection["LmStudioUrl"]
-    ?? builder.Configuration["OpenAiUrl"]
-    ?? builder.Configuration["BackendUrl"]
-    ?? builder.Configuration["TargetUrl"]
-    ?? builder.Configuration["LmStudioUrl"]
+string targetUrl = ProxyConfig.Get(cfg, ["OPENAI_URL", "LMSTUDIO_URL"], "OpenAiUrl", "BackendUrl", "TargetUrl", "LmStudioUrl")
     ?? "http://localhost:1234";
-
-string proxyHost = configSection["ProxyHost"]
-    ?? builder.Configuration["ProxyHost"]
-    ?? "0.0.0.0";
-
-int proxyPort = configSection.GetValue<int?>("ProxyPort")
-    ?? builder.Configuration.GetValue<int?>("ProxyPort")
-    ?? 11434;
-
-int timeoutSeconds = configSection.GetValue<int?>("TimeoutSeconds")
-    ?? builder.Configuration.GetValue<int?>("TimeoutSeconds")
-    ?? 600;
-
-bool enableLogging = configSection.GetValue<bool?>("EnableLogging")
-    ?? builder.Configuration.GetValue<bool?>("EnableLogging")
-    ?? true;
+string proxyHost = ProxyConfig.Get(cfg, ["PROXY_HOST"], "ProxyHost") ?? "0.0.0.0";
+int proxyPort = int.Parse(ProxyConfig.Get(cfg, ["PROXY_PORT"], "ProxyPort") ?? "11434");
+int timeoutSeconds = int.Parse(ProxyConfig.Get(cfg, ["TIMEOUT_SECONDS"], "TimeoutSeconds") ?? "600");
+bool enableLogging = bool.Parse(ProxyConfig.Get(cfg, ["ENABLE_LOGGING"], "EnableLogging") ?? "true");
+bool enableDashboard = bool.Parse(ProxyConfig.Get(cfg, ["ENABLE_DASHBOARD"], "EnableDashboard") ?? "true");
+bool dashboardAllowRemote = bool.Parse(ProxyConfig.Get(cfg, ["DASHBOARD_ALLOW_REMOTE"], "DashboardAllowRemote") ?? "false");
+const string reportedOllamaVersion = "0.18.3"; // Minimum Ollama version the VS Code Copilot integration documents
 
 string proxyUrl = $"http://{proxyHost}:{proxyPort}";
+bool strictBackend = OllamaTranslator.IsStrictOpenAi(targetUrl);
 
 var app = builder.Build();
 
@@ -67,7 +71,34 @@ Console.WriteLine($"  Target API:       {targetUrl}");
 Console.WriteLine($"  Listening on:     {proxyUrl}");
 Console.WriteLine($"  Timeout:          {timeoutSeconds}s");
 Console.WriteLine($"  Logging:          {(enableLogging ? "Enabled" : "Disabled")}");
+if (enableDashboard)
+    Console.WriteLine($"  Dashboard:        http://localhost:{proxyPort}/dashboard{(dashboardAllowRemote ? " (open to the network)" : " (this machine only)")}");
 Console.WriteLine("=================================================");
+
+// Stats middleware: times every request for the dashboard (metadata only, never prompt text).
+var stats = new ProxyStats();
+app.Use(async (context, next) =>
+{
+    if (context.Request.Path.StartsWithSegments("/dashboard"))
+    {
+        await next();
+        return;
+    }
+
+    var metrics = RequestMetrics.Attach(context);
+    int status = 500;
+    try
+    {
+        await next();
+        status = context.Response.StatusCode;
+    }
+    finally
+    {
+        // Route pattern, not the raw path, so unknown URLs can't grow the per-endpoint table.
+        string endpoint = (context.GetEndpoint() as RouteEndpoint)?.RoutePattern.RawText ?? "(no route)";
+        stats.Record(context.Request.Method, endpoint, status, metrics);
+    }
+});
 
 // Logging Middleware
 if (enableLogging)
@@ -162,6 +193,9 @@ async Task<List<JsonObject>> GetLmStudioModelsAsync()
                             ["params_string"] = "unknown",
                             ["format"] = "gguf"
                         });
+                        // Keep the context size when the backend reports one (vLLM: max_model_len).
+                        foreach (var field in new[] { "max_model_len", "context_length", "max_context_length" })
+                            if (obj[field] is { } value) list[^1][field] = value.DeepClone();
                     }
                 }
             }
@@ -231,8 +265,15 @@ JsonObject ConvertLmStudioModelForTags(JsonObject m)
     bool isEmbedding = (m["type"]?.ToString() == "embedding") || key.Contains("embed", StringComparison.OrdinalIgnoreCase);
     bool isVision = (m["capabilities"]?["vision"]?.GetValue<bool>() == true) || key.Contains("vision", StringComparison.OrdinalIgnoreCase);
     bool isTools = (m["capabilities"]?["trained_for_tool_use"]?.GetValue<bool>() == true) || !isEmbedding;
+    // shortcut: guesses reasoning models by name; upgrade once backends report a reasoning capability consistently.
+    string[] reasoningHints = ["think", "reason", "qwen3", "deepseek-r1", "gpt-oss", "magistral", "qwq"];
+    // Qwen3 Instruct/Coder variants (e.g. qwen3-coder-30b-a3b-instruct) don't reason.
+    bool nonReasoningQwen = key.Contains("qwen3", StringComparison.OrdinalIgnoreCase)
+        && (key.Contains("instruct", StringComparison.OrdinalIgnoreCase) || key.Contains("coder", StringComparison.OrdinalIgnoreCase));
+    bool isThinking = !isEmbedding && (OllamaTranslator.ReportsReasoning(m["capabilities"]?["reasoning"])
+        ?? (!nonReasoningQwen && reasoningHints.Any(h => key.Contains(h, StringComparison.OrdinalIgnoreCase))));
 
-    // In Ollama, capabilities is an array of strings (e.g. ["completion", "chat", "tools"])
+    // Only values real Ollama uses: completion, tools, insert, vision, embedding, thinking ("chat" is not one).
     var caps = new JsonArray();
     if (isEmbedding)
     {
@@ -241,9 +282,9 @@ JsonObject ConvertLmStudioModelForTags(JsonObject m)
     else
     {
         caps.Add("completion");
-        caps.Add("chat");
         if (isTools) caps.Add("tools");
         if (isVision) caps.Add("vision");
+        if (isThinking) caps.Add("thinking");
     }
 
     string digest = "sha256:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key))).ToLowerInvariant();
@@ -283,6 +324,17 @@ JsonObject ConvertLmStudioModelForShow(JsonObject m)
     string template = "{{ if .System }}<|im_start|>system\n{{ .System }}<|im_end|>\n{{ end }}{{ if .Prompt }}<|im_start|>user\n{{ .Prompt }}<|im_end|>\n{{ end }}<|im_start|>assistant\n{{ .Response }}<|im_end|>";
     string modelfile = $"# Modelfile for {key}\nFROM {key}\nTEMPLATE \"\"\"{template}\"\"\"\nPARAMETER stop \"<|im_start|>\"\nPARAMETER stop \"<|im_end|>\"\n";
 
+    // Real Ollama reports "<architecture>.context_length"; Copilot reads it for the model's context window.
+    var modelInfo = new JsonObject
+    {
+        ["general.architecture"] = family,
+        ["general.file_type"] = 2,
+        ["general.parameter_count"] = OllamaTranslator.ParameterCount(m["params_string"]?.ToString()) ?? 7_000_000_000L,
+        ["general.quantization_version"] = 2
+    };
+    if (RequestMetrics.ModelContextLength(m) is int contextLength)
+        modelInfo[$"{family}.context_length"] = contextLength;
+
     return new JsonObject
     {
         ["license"] = "Unknown",
@@ -299,13 +351,7 @@ JsonObject ConvertLmStudioModelForShow(JsonObject m)
             ["parameter_size"] = details["parameter_size"]?.ToString() ?? "7B",
             ["quantization_level"] = details["quantization_level"]?.ToString() ?? "Q4_K_M"
         },
-        ["model_info"] = new JsonObject
-        {
-            ["general.architecture"] = family,
-            ["general.file_type"] = 2,
-            ["general.parameter_count"] = 7_000_000_000L,
-            ["general.quantization_version"] = 2
-        },
+        ["model_info"] = modelInfo,
         ["capabilities"] = caps.DeepClone(),
         ["modified_at"] = tagObj["modified_at"]?.ToString() ?? DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.ffffffZ")
     };
@@ -316,7 +362,7 @@ JsonObject ConvertLmStudioModelForShow(JsonObject m)
 //  Root Healthcheck & Version (Required by Copilot & Ollama tools)
 // ---------------------------------------------------------
 app.MapGet("/", () => Results.Text("Ollama is running"));
-app.MapGet("/api/version", () => Results.Json(new JsonObject { ["version"] = "0.5.12" }));
+app.MapGet("/api/version", () => Results.Json(new JsonObject { ["version"] = reportedOllamaVersion }));
 
 //
 // ---------------------------------------------------------
@@ -457,18 +503,21 @@ app.MapPost("/api/chat", async (HttpContext ctx) =>
     var lmModels = await GetLmStudioModelsAsync();
     var matched = MatchModel(lmModels, reqModel);
     string targetModel = matched?["key"]?.ToString() ?? matched?["id"]?.ToString() ?? reqModel;
+    RequestMetrics.For(ctx)?.SetModel(targetModel, matched);
 
     // Ollama streams by default unless stream is explicitly set to false
     bool stream = !reqJson.TryGetPropertyValue("stream", out var s) || s!.GetValue<bool>();
 
     var messages = reqJson["messages"]?.AsArray() ?? new JsonArray();
+    long started = System.Diagnostics.Stopwatch.GetTimestamp();
 
     var lmReq = new JsonObject
     {
         ["model"] = targetModel,
-        ["messages"] = messages.DeepClone(),
+        ["messages"] = OllamaTranslator.ToOpenAiMessages(messages),
         ["stream"] = stream
     };
+    if (stream) lmReq["stream_options"] = new JsonObject { ["include_usage"] = true };
 
     // Forward tools if present
     if (reqJson.TryGetPropertyValue("tools", out var toolsNode) && toolsNode != null)
@@ -476,13 +525,8 @@ app.MapPost("/api/chat", async (HttpContext ctx) =>
         lmReq["tools"] = toolsNode.DeepClone();
     }
 
-    // Forward options (temperature, top_p, max_tokens, etc.)
-    if (reqJson.TryGetPropertyValue("options", out var optNode) && optNode is JsonObject opts)
-    {
-        if (opts.TryGetPropertyValue("temperature", out var temp)) lmReq["temperature"] = temp?.GetValue<double>();
-        if (opts.TryGetPropertyValue("top_p", out var topP)) lmReq["top_p"] = topP?.GetValue<double>();
-        if (opts.TryGetPropertyValue("num_predict", out var maxT)) lmReq["max_tokens"] = maxT?.GetValue<int>();
-    }
+    OllamaTranslator.ApplyRequestOptions(lmReq, reqJson, strictBackend);
+    bool includeThinking = !OllamaTranslator.ThinkingDisabled(reqJson);
 
     LoggerUtility.LogMessage(enableLogging, $"[INFO] /api/chat forwarding to LM Studio (model: '{targetModel}', stream: {stream}, msgs: {messages.Count})");
 
@@ -515,19 +559,21 @@ app.MapPost("/api/chat", async (HttpContext ctx) =>
 
         var lmJson = JsonNode.Parse(respContent)?.AsObject();
         var choice = lmJson?["choices"]?[0];
-        var msg = choice?["message"]?.AsObject() ?? new JsonObject { ["role"] = "assistant", ["content"] = "" };
+        var msg = choice?["message"];
+
+        var outMsg = new JsonObject { ["role"] = "assistant", ["content"] = msg?["content"]?.ToString() ?? "" };
+        if (msg?["tool_calls"] is JsonArray toolCalls && toolCalls.Count > 0)
+            outMsg["tool_calls"] = OllamaTranslator.ToOllamaToolCalls(toolCalls);
+        if (includeThinking && OllamaTranslator.ReasoningText(msg) is { } thinking)
+            outMsg["thinking"] = thinking;
 
         var outJson = new JsonObject
         {
             ["model"] = reqModel,
             ["created_at"] = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.ffffffZ"),
-            ["message"] = msg.DeepClone(),
-            ["done"] = true,
-            ["total_duration"] = 1_000_000_000L,
-            ["load_duration"] = 10_000_000L,
-            ["prompt_eval_count"] = lmJson?["usage"]?["prompt_tokens"]?.GetValue<int>() ?? 0,
-            ["eval_count"] = lmJson?["usage"]?["completion_tokens"]?.GetValue<int>() ?? 0
+            ["message"] = outMsg
         };
+        OllamaTranslator.AddDoneFields(outJson, choice?["finish_reason"]?.ToString(), lmJson?["usage"], started, RequestMetrics.For(ctx));
 
         ctx.Response.Headers.ContentType = "application/json";
         await ctx.Response.WriteAsJsonAsync(outJson);
@@ -567,6 +613,22 @@ app.MapPost("/api/chat", async (HttpContext ctx) =>
     using var streamContent = await streamResp.Content.ReadAsStreamAsync();
     using var reader = new StreamReader(streamContent, Encoding.UTF8);
 
+    var translator = new ChatStreamTranslator(includeThinking);
+
+    async Task WriteChunkAsync(JsonObject message)
+    {
+        RequestMetrics.For(ctx)?.MarkFirstToken();
+        var outChunk = new JsonObject
+        {
+            ["model"] = reqModel,
+            ["created_at"] = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.ffffffZ"),
+            ["message"] = message,
+            ["done"] = false
+        };
+        await ctx.Response.WriteAsync(outChunk.ToJsonString() + "\n");
+        await ctx.Response.Body.FlushAsync();
+    }
+
     string? line;
     while ((line = await reader.ReadLineAsync()) != null)
     {
@@ -578,46 +640,17 @@ app.MapPost("/api/chat", async (HttpContext ctx) =>
 
         try
         {
-            var json = JsonNode.Parse(data)?.AsObject();
-            if (json == null) continue;
-
-            var choice = json["choices"]?[0];
-            var delta = choice?["delta"]?.AsObject();
-            if (delta == null) continue;
-
-            string? chunk = delta["content"]?.ToString();
-            var toolCalls = delta["tool_calls"];
-
-            if (chunk != null || toolCalls != null)
-            {
-                var msgNode = new JsonObject
-                {
-                    ["role"] = "assistant",
-                    ["content"] = chunk ?? ""
-                };
-
-                if (toolCalls != null)
-                {
-                    msgNode["tool_calls"] = toolCalls.DeepClone();
-                }
-
-                var outChunk = new JsonObject
-                {
-                    ["model"] = reqModel,
-                    ["created_at"] = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.ffffffZ"),
-                    ["message"] = msgNode,
-                    ["done"] = false
-                };
-
-                await ctx.Response.WriteAsync(outChunk.ToJsonString() + "\n");
-                await ctx.Response.Body.FlushAsync();
-            }
+            if (JsonNode.Parse(data) is JsonObject json && translator.Add(json) is { } message)
+                await WriteChunkAsync(message);
         }
         catch (Exception ex)
         {
             LoggerUtility.LogMessage(enableLogging, $"[WARN] Error parsing stream chunk: {ex.Message}");
         }
     }
+
+    if (translator.TakeToolCalls() is { } streamedToolCalls)
+        await WriteChunkAsync(new JsonObject { ["role"] = "assistant", ["content"] = "", ["tool_calls"] = streamedToolCalls });
 
     // Send final closing chunk
     var doneChunk = new JsonObject
@@ -628,11 +661,9 @@ app.MapPost("/api/chat", async (HttpContext ctx) =>
         {
             ["role"] = "assistant",
             ["content"] = ""
-        },
-        ["done"] = true,
-        ["total_duration"] = 1_000_000_000L,
-        ["eval_count"] = 100
+        }
     };
+    OllamaTranslator.AddDoneFields(doneChunk, translator.FinishReason, translator.Usage, started, RequestMetrics.For(ctx));
 
     await ctx.Response.WriteAsync(doneChunk.ToJsonString() + "\n");
     await ctx.Response.Body.FlushAsync();
@@ -656,16 +687,20 @@ app.MapPost("/api/generate", async (HttpContext ctx) =>
     var lmModels = await GetLmStudioModelsAsync();
     var matched = MatchModel(lmModels, reqModel);
     string targetModel = matched?["key"]?.ToString() ?? matched?["id"]?.ToString() ?? reqModel;
+    RequestMetrics.For(ctx)?.SetModel(targetModel, matched);
 
     bool stream = !reqJson.TryGetPropertyValue("stream", out var s) || s!.GetValue<bool>();
-    string prompt = reqJson["prompt"]?.ToString() ?? "";
+
+    long started = System.Diagnostics.Stopwatch.GetTimestamp();
 
     var lmReq = new JsonObject
     {
         ["model"] = targetModel,
-        ["prompt"] = prompt,
         ["stream"] = stream
     };
+    OllamaTranslator.ApplyGenerateFields(lmReq, reqJson);
+    OllamaTranslator.ApplyRequestOptions(lmReq, reqJson, strictBackend);
+    if (stream) lmReq["stream_options"] = new JsonObject { ["include_usage"] = true };
 
     LoggerUtility.LogMessage(enableLogging, $"[INFO] /api/generate forwarding to LM Studio (model: '{targetModel}', stream: {stream})");
 
@@ -698,9 +733,9 @@ app.MapPost("/api/generate", async (HttpContext ctx) =>
         {
             ["model"] = reqModel,
             ["created_at"] = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.ffffffZ"),
-            ["response"] = lmJson?["choices"]?[0]?["text"]?.ToString() ?? "",
-            ["done"] = true
+            ["response"] = lmJson?["choices"]?[0]?["text"]?.ToString() ?? ""
         };
+        OllamaTranslator.AddDoneFields(outJson, lmJson?["choices"]?[0]?["finish_reason"]?.ToString(), lmJson?["usage"], started, RequestMetrics.For(ctx));
 
         ctx.Response.Headers.ContentType = "application/json";
         await ctx.Response.WriteAsJsonAsync(outJson);
@@ -731,6 +766,8 @@ app.MapPost("/api/generate", async (HttpContext ctx) =>
     using var reader = new StreamReader(streamContent, Encoding.UTF8);
 
     string? line;
+    string? finishReason = null;
+    JsonNode? usage = null;
     while ((line = await reader.ReadLineAsync()) != null)
     {
         if (string.IsNullOrWhiteSpace(line)) continue;
@@ -742,10 +779,14 @@ app.MapPost("/api/generate", async (HttpContext ctx) =>
         try
         {
             var json = JsonNode.Parse(data)?.AsObject();
-            var chunk = json?["choices"]?[0]?["text"]?.ToString();
+            if (json?["usage"] is JsonObject u) usage = u.DeepClone();
+            var firstChoice = (json?["choices"] as JsonArray)?.FirstOrDefault(); // the usage chunk has no choices
+            if (firstChoice?["finish_reason"]?.ToString() is { Length: > 0 } fr) finishReason = fr;
+            var chunk = firstChoice?["text"]?.ToString();
 
-            if (chunk != null)
+            if (!string.IsNullOrEmpty(chunk))
             {
+                RequestMetrics.For(ctx)?.MarkFirstToken();
                 var outChunk = new JsonObject
                 {
                     ["model"] = reqModel,
@@ -765,9 +806,9 @@ app.MapPost("/api/generate", async (HttpContext ctx) =>
     {
         ["model"] = reqModel,
         ["created_at"] = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.ffffffZ"),
-        ["response"] = "",
-        ["done"] = true
+        ["response"] = ""
     };
+    OllamaTranslator.AddDoneFields(doneChunk, finishReason, usage, started, RequestMetrics.For(ctx));
 
     await ctx.Response.WriteAsync(doneChunk.ToJsonString() + "\n");
     await ctx.Response.Body.FlushAsync();
@@ -790,6 +831,7 @@ async Task HandleEmbeddingsAsync(HttpContext ctx)
     var lmModels = await GetLmStudioModelsAsync();
     var matched = MatchModel(lmModels, reqModel);
     string targetModel = matched?["key"]?.ToString() ?? matched?["id"]?.ToString() ?? reqModel;
+    RequestMetrics.For(ctx)?.SetModel(targetModel, matched);
 
     var input = reqJson["prompt"] ?? reqJson["input"];
 
@@ -798,6 +840,7 @@ async Task HandleEmbeddingsAsync(HttpContext ctx)
         ["model"] = targetModel,
         ["input"] = input?.DeepClone()
     };
+    if (reqJson["dimensions"] is JsonValue dimensions) lmReq["dimensions"] = dimensions.DeepClone();
 
     HttpResponseMessage resp;
     try
@@ -823,6 +866,8 @@ async Task HandleEmbeddingsAsync(HttpContext ctx)
 
     var lmJson = JsonNode.Parse(respContent)?.AsObject();
     var data = lmJson?["data"]?.AsArray();
+    if (RequestMetrics.For(ctx) is { } embedMetrics && lmJson?["usage"]?["prompt_tokens"] is JsonValue embedTokens)
+        embedMetrics.PromptTokens = embedTokens.GetValue<int>();
 
     if (ctx.Request.Path.Value?.EndsWith("/embed", StringComparison.OrdinalIgnoreCase) == true)
     {
@@ -836,11 +881,14 @@ async Task HandleEmbeddingsAsync(HttpContext ctx)
             }
         }
 
-        await ctx.Response.WriteAsJsonAsync(new JsonObject
+        var embedResponse = new JsonObject
         {
             ["model"] = reqModel,
             ["embeddings"] = embeddingsArray
-        });
+        };
+        if (lmJson?["usage"]?["prompt_tokens"] is JsonValue promptTokens)
+            embedResponse["prompt_eval_count"] = promptTokens.DeepClone();
+        await ctx.Response.WriteAsJsonAsync(embedResponse);
     }
     else
     {
@@ -861,11 +909,9 @@ app.MapPost("/api/embed", HandleEmbeddingsAsync);
 //  Used by Visual Studio Copilot Chat (Microsoft.Extensions.AI / OpenAI.Chat.ChatClient)
 // =========================================================
 
-//
-// ---------------------------------------------------------
-//  /v1/chat/completions & /chat/completions
-// ---------------------------------------------------------
-async Task HandleOpenAiChatCompletionsAsync(HttpContext ctx)
+// Passes an OpenAI-format request to the backend unchanged (apart from the model name) and records
+// tokens, first-token time and backend errors for the dashboard.
+async Task ForwardOpenAiRequestAsync(HttpContext ctx, string backendPath)
 {
     var reqJson = await ParseRequestBodyAsync(ctx);
     if (reqJson == null)
@@ -879,18 +925,23 @@ async Task HandleOpenAiChatCompletionsAsync(HttpContext ctx)
     var lmModels = await GetLmStudioModelsAsync();
     var matched = MatchModel(lmModels, reqModel);
     string targetModel = matched?["key"]?.ToString() ?? matched?["id"]?.ToString() ?? reqModel;
+    var metrics = RequestMetrics.For(ctx);
+    metrics?.SetModel(targetModel, matched);
 
-    // Update model name to match LM Studio model
+    // Update model name to match the backend's model
     reqJson["model"] = targetModel;
 
     bool stream = reqJson.TryGetPropertyValue("stream", out var s) && s!.GetValue<bool>();
+    bool hideUsageChunk = stream && PassthroughObserver.RequestStreamUsage(reqJson);
 
-    LoggerUtility.LogMessage(enableLogging, $"[INFO] /v1/chat/completions forwarding to backend (model: '{targetModel}', stream: {stream})");
+    LoggerUtility.LogMessage(enableLogging, $"[INFO] {backendPath} forwarding to backend (model: '{targetModel}', stream: {stream})");
 
-    var req = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
+    var req = new HttpRequestMessage(HttpMethod.Post, backendPath)
     {
         Content = new StringContent(reqJson.ToJsonString(), Encoding.UTF8, "application/json")
     };
+
+    static string Shorten(string text) => text.Length <= 500 ? text : text[..500] + "…";
 
     if (!stream)
     {
@@ -901,13 +952,17 @@ async Task HandleOpenAiChatCompletionsAsync(HttpContext ctx)
         }
         catch (Exception ex)
         {
-            LoggerUtility.LogMessage(enableLogging, $"[ERROR] Failed to send /v1/chat/completions to backend: {ex.Message}");
+            LoggerUtility.LogMessage(enableLogging, $"[ERROR] Failed to send {backendPath} to backend: {ex.Message}");
             ctx.Response.StatusCode = 502;
             await ctx.Response.WriteAsJsonAsync(new JsonObject { ["error"] = ex.Message });
             return;
         }
 
         string respContent = await resp.Content.ReadAsStringAsync();
+        string? backendError = PassthroughObserver.ObserveBody(respContent, metrics);
+        if (backendError != null || !resp.IsSuccessStatusCode)
+            LoggerUtility.LogMessage(enableLogging, $"[ERROR] Backend returned {(int)resp.StatusCode} for {backendPath}: {Shorten(backendError ?? respContent)}");
+
         ctx.Response.StatusCode = (int)resp.StatusCode;
         ctx.Response.Headers.ContentType = "application/json";
         await ctx.Response.WriteAsync(respContent);
@@ -915,9 +970,6 @@ async Task HandleOpenAiChatCompletionsAsync(HttpContext ctx)
     }
 
     // Streaming SSE mode (text/event-stream)
-    ctx.Response.Headers.ContentType = "text/event-stream";
-    ctx.Response.Headers.CacheControl = "no-cache";
-
     HttpResponseMessage streamResp;
     try
     {
@@ -925,13 +977,26 @@ async Task HandleOpenAiChatCompletionsAsync(HttpContext ctx)
     }
     catch (Exception ex)
     {
-        LoggerUtility.LogMessage(enableLogging, $"[ERROR] Failed to send /v1/chat/completions to LM Studio: {ex.Message}");
+        LoggerUtility.LogMessage(enableLogging, $"[ERROR] Failed to send {backendPath} to backend: {ex.Message}");
         ctx.Response.StatusCode = 502;
-        await ctx.Response.WriteAsync($"data: {{\"error\": \"{ex.Message}\"}}\n\n");
+        await ctx.Response.WriteAsJsonAsync(new JsonObject { ["error"] = ex.Message });
+        return;
+    }
+
+    if (!streamResp.IsSuccessStatusCode)
+    {
+        string errorBody = await streamResp.Content.ReadAsStringAsync();
+        string? backendError = PassthroughObserver.ObserveBody(errorBody, metrics);
+        LoggerUtility.LogMessage(enableLogging, $"[ERROR] Backend returned {(int)streamResp.StatusCode} for {backendPath}: {Shorten(backendError ?? errorBody)}");
+        ctx.Response.StatusCode = (int)streamResp.StatusCode;
+        ctx.Response.Headers.ContentType = streamResp.Content.Headers.ContentType?.ToString() ?? "application/json";
+        await ctx.Response.WriteAsync(errorBody);
         return;
     }
 
     ctx.Response.StatusCode = (int)streamResp.StatusCode;
+    ctx.Response.Headers.ContentType = "text/event-stream";
+    ctx.Response.Headers.CacheControl = "no-cache";
 
     using var streamContent = await streamResp.Content.ReadAsStreamAsync();
     using var reader = new StreamReader(streamContent, Encoding.UTF8);
@@ -939,6 +1004,11 @@ async Task HandleOpenAiChatCompletionsAsync(HttpContext ctx)
     string? line;
     while ((line = await reader.ReadLineAsync()) != null)
     {
+        var observed = PassthroughObserver.ObserveStreamLine(line, metrics);
+        if (observed.Error != null)
+            LoggerUtility.LogMessage(enableLogging, $"[ERROR] Backend error inside {backendPath} stream: {Shorten(observed.Error)}");
+        if (hideUsageChunk && observed.UsageOnly) continue; // the client didn't ask for usage; we did
+
         await ctx.Response.WriteAsync(line + "\n");
         if (string.IsNullOrWhiteSpace(line) || line.StartsWith("data:"))
         {
@@ -947,6 +1017,12 @@ async Task HandleOpenAiChatCompletionsAsync(HttpContext ctx)
     }
     await ctx.Response.Body.FlushAsync();
 }
+
+//
+// ---------------------------------------------------------
+//  /v1/chat/completions & /chat/completions
+// ---------------------------------------------------------
+Task HandleOpenAiChatCompletionsAsync(HttpContext ctx) => ForwardOpenAiRequestAsync(ctx, "/v1/chat/completions");
 
 app.MapPost("/v1/chat/completions", HandleOpenAiChatCompletionsAsync);
 app.MapPost("/chat/completions", HandleOpenAiChatCompletionsAsync);
@@ -955,74 +1031,7 @@ app.MapPost("/chat/completions", HandleOpenAiChatCompletionsAsync);
 // ---------------------------------------------------------
 //  /v1/completions & /completions
 // ---------------------------------------------------------
-async Task HandleOpenAiCompletionsAsync(HttpContext ctx)
-{
-    var reqJson = await ParseRequestBodyAsync(ctx);
-    if (reqJson == null)
-    {
-        ctx.Response.StatusCode = 400;
-        await ctx.Response.WriteAsJsonAsync(new JsonObject { ["error"] = "Invalid JSON body" });
-        return;
-    }
-
-    string reqModel = reqJson["model"]?.ToString() ?? "default";
-    var lmModels = await GetLmStudioModelsAsync();
-    var matched = MatchModel(lmModels, reqModel);
-    string targetModel = matched?["key"]?.ToString() ?? matched?["id"]?.ToString() ?? reqModel;
-
-    reqJson["model"] = targetModel;
-
-    bool stream = reqJson.TryGetPropertyValue("stream", out var s) && s!.GetValue<bool>();
-
-    LoggerUtility.LogMessage(enableLogging, $"[INFO] /v1/completions forwarding to LM Studio (model: '{targetModel}', stream: {stream})");
-
-    var req = new HttpRequestMessage(HttpMethod.Post, "/v1/completions")
-    {
-        Content = new StringContent(reqJson.ToJsonString(), Encoding.UTF8, "application/json")
-    };
-
-    if (!stream)
-    {
-        HttpResponseMessage resp;
-        try
-        {
-            resp = await http.SendAsync(req);
-        }
-        catch (Exception ex)
-        {
-            LoggerUtility.LogMessage(enableLogging, $"[ERROR] Failed to send /v1/completions to backend: {ex.Message}");
-            ctx.Response.StatusCode = 502;
-            await ctx.Response.WriteAsJsonAsync(new JsonObject { ["error"] = ex.Message });
-            return;
-        }
-
-        string respContent = await resp.Content.ReadAsStringAsync();
-        ctx.Response.StatusCode = (int)resp.StatusCode;
-        ctx.Response.Headers.ContentType = "application/json";
-        await ctx.Response.WriteAsync(respContent);
-        return;
-    }
-
-    ctx.Response.Headers.ContentType = "text/event-stream";
-    ctx.Response.Headers.CacheControl = "no-cache";
-
-    var streamResp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
-    ctx.Response.StatusCode = (int)streamResp.StatusCode;
-
-    using var streamContent = await streamResp.Content.ReadAsStreamAsync();
-    using var reader = new StreamReader(streamContent, Encoding.UTF8);
-
-    string? line;
-    while ((line = await reader.ReadLineAsync()) != null)
-    {
-        await ctx.Response.WriteAsync(line + "\n");
-        if (string.IsNullOrWhiteSpace(line) || line.StartsWith("data:"))
-        {
-            await ctx.Response.Body.FlushAsync();
-        }
-    }
-    await ctx.Response.Body.FlushAsync();
-}
+Task HandleOpenAiCompletionsAsync(HttpContext ctx) => ForwardOpenAiRequestAsync(ctx, "/v1/completions");
 
 app.MapPost("/v1/completions", HandleOpenAiCompletionsAsync);
 app.MapPost("/completions", HandleOpenAiCompletionsAsync);
@@ -1096,6 +1105,7 @@ app.MapPost("/v1/embeddings", async (HttpContext ctx) =>
     var lmModels = await GetLmStudioModelsAsync();
     var matched = MatchModel(lmModels, reqModel);
     string targetModel = matched?["key"]?.ToString() ?? matched?["id"]?.ToString() ?? reqModel;
+    RequestMetrics.For(ctx)?.SetModel(targetModel, matched);
     reqJson["model"] = targetModel;
 
     HttpResponseMessage resp;
@@ -1116,6 +1126,23 @@ app.MapPost("/v1/embeddings", async (HttpContext ctx) =>
     ctx.Response.Headers.ContentType = "application/json";
     await ctx.Response.WriteAsync(await resp.Content.ReadAsStringAsync());
 });
+
+//
+// ---------------------------------------------------------
+//  Dashboard (/dashboard)
+// ---------------------------------------------------------
+if (enableDashboard)
+{
+    Dashboard.Map(app, stats, http, GetLmStudioModelsAsync, ConvertLmStudioModelForTags, new JsonObject
+    {
+        ["targetUrl"] = Dashboard.RedactUrl(targetUrl),
+        ["listen"] = proxyUrl,
+        ["timeoutSeconds"] = timeoutSeconds,
+        ["logging"] = enableLogging,
+        ["dashboardAllowRemote"] = dashboardAllowRemote,
+        ["reportedOllamaVersion"] = reportedOllamaVersion,
+    }, dashboardAllowRemote);
+}
 
 //
 // ---------------------------------------------------------

@@ -40,7 +40,7 @@ public class IntegrationTests : IClassFixture<WebApplicationFactory<Program>>
         response.EnsureSuccessStatusCode();
         var json = await response.Content.ReadFromJsonAsync<JsonObject>();
         Assert.NotNull(json);
-        Assert.Equal("0.5.12", json["version"]?.ToString());
+        Assert.Equal("0.18.3", json["version"]?.ToString());
     }
 
     [Fact]

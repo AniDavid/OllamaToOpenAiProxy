@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.10.0.schema.json
+PackageIdentifier: AniDavid.OllamaToOpenAiProxy
+PackageVersion: 0.6.5
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+- RelativeFilePath: OllamaToOpenAiProxy.exe
+  PortableCommandAlias: ollama-openai-proxy
+Installers:
+- Architecture: x64
+  InstallerUrl: https://github.com/AniDavid/OllamaToOpenAiProxy/releases/download/v0.6.5/OllamaToOpenAiProxy-win-x64.zip
+  InstallerSha256: FILL_IN_AFTER_v0.6.5_RELEASE
+ManifestType: installer
+ManifestVersion: 1.10.0

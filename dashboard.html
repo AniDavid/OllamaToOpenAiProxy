@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Proxy Dashboard</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #f6f7f9; --surface: #ffffff; --border: #e3e6ea; --text: #1d2430; --muted: #667085;
+    --accent: #3b6fd8; --ok: #1f8a4c; --warn: #b7791f; --bad: #c2413a; --bar: #e8ecf2; --chip: #eef2f8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151a; --surface: #1a1e25; --border: #2a303a; --text: #e4e7ec; --muted: #98a2b3;
+      --accent: #6f9bf0; --ok: #4cc27f; --warn: #e0a84a; --bad: #ef6b63; --bar: #2a303a; --chip: #252b35;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1200px; margin: 0 auto; padding: 20px 16px 40px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 18px; }
+  h1 { font-size: 20px; margin: 0; font-weight: 600; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+  .spacer { flex: 1; }
+  .muted { color: var(--muted); }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); font-size: 13px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .tile, .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .tile .label { color: var(--muted); font-size: 12px; }
+  .tile .value { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; margin-bottom: 16px; }
+  .card { margin-bottom: 16px; } .grid2 .card { margin-bottom: 0; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
+  dt { color: var(--muted); } dd { margin: 0; overflow-wrap: anywhere; }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  td.num, th.num { text-align: right; }
+  tr:last-child td { border-bottom: none; }
+  .chip { display: inline-block; padding: 1px 7px; margin-right: 4px; border-radius: 6px; background: var(--chip); font-size: 12px; }
+  .status-ok { color: var(--ok); } .status-bad { color: var(--bad); }
+  .error-cell { max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+  .meter { display: flex; align-items: center; gap: 8px; }
+  .bar { flex: 1; min-width: 60px; height: 6px; background: var(--bar); border-radius: 3px; overflow: hidden; }
+  .bar > span { display: block; height: 100%; background: var(--accent); }
+  .bar.warn > span { background: var(--warn); } .bar.bad > span { background: var(--bad); }
+  .gpu + .gpu { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+  .gpu .row { display: grid; grid-template-columns: 60px 1fr 110px; gap: 8px; align-items: center; margin-top: 6px; }
+  .banner { display: none; padding: 10px 14px; border-radius: 8px; background: var(--bad); color: #fff; margin-bottom: 14px; }
+  .empty { color: var(--muted); padding: 8px 0; }
+  footer { color: var(--muted); font-size: 12px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>OllamaToOpenAiProxy</h1>
+    <span class="pill"><span class="dot" id="backend-dot"></span><span id="backend-text">Checking backend…</span></span>
+    <span class="spacer"></span>
+    <span class="muted" id="uptime"></span>
+    <span class="muted" id="updated"></span>
+  </header>
+
+  <div class="banner" id="banner">Can't reach the proxy. Retrying…</div>
+
+  <section class="tiles" aria-label="Totals since start">
+    <div class="tile"><div class="label">Requests</div><div class="value" id="t-requests">–</div></div>
+    <div class="tile"><div class="label">Errors</div><div class="value" id="t-errors">–</div></div>
+    <div class="tile"><div class="label">Prompt tokens</div><div class="value" id="t-prompt">–</div></div>
+    <div class="tile"><div class="label">Completion tokens</div><div class="value" id="t-completion">–</div></div>
+    <div class="tile"><div class="label">Avg tokens/s</div><div class="value" id="t-avg-tps">–</div></div>
+    <div class="tile"><div class="label">Last tokens/s</div><div class="value" id="t-last-tps">–</div></div>
+  </section>
+
+  <div class="grid2">
+    <section class="card"><h2>Configuration</h2><dl id="config"></dl></section>
+    <section class="card"><h2>GPU</h2><div id="gpu"></div></section>
+  </div>
+
+  <section class="card">
+    <h2>Models</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Name</th><th>Size</th><th>Quant</th><th>Capabilities</th><th class="num">Context</th><th>Last context use</th></tr></thead>
+      <tbody id="models"></tbody>
+    </table></div>
+  </section>
+
+  <section class="card">
+    <h2>Recent requests</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Time</th><th>Endpoint</th><th>Model</th><th>Status</th><th class="num">Total</th><th class="num">First token</th>
+        <th class="num">Tokens in → out</th><th class="num">Tokens/s</th><th>Context use</th></tr></thead>
+      <tbody id="requests"></tbody>
+    </table></div>
+  </section>
+
+  <section class="card">
+    <h2>Endpoints</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Endpoint</th><th class="num">Requests</th><th class="num">Errors</th></tr></thead>
+      <tbody id="endpoints"></tbody>
+    </table></div>
+  </section>
+
+  <footer>
+    Stats are kept in memory since the proxy started (last 200 requests). No prompt or response text is stored.
+    Tokens/s needs streaming. Errors a backend reports inside a stream count as errors even though the HTTP status was 200; hover to see the full message. GPU stats need an NVIDIA GPU with nvidia-smi on the proxy's machine.
+  </footer>
+</main>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const fmt = n => n == null ? "–" : Number(n).toLocaleString();
+const ms = n => n == null ? "–" : n >= 1000 ? (n / 1000).toFixed(1) + " s" : Math.round(n) + " ms";
+
+// Builds an element; strings become text nodes, so backend data is never parsed as HTML.
+function el(tag, attrs, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "class") node.className = v; else node.setAttribute(k, v);
+  }
+  for (const c of children.flat()) if (c != null) node.append(c instanceof Node ? c : String(c));
+  return node;
+}
+
+function meter(fraction, label) {
+  if (fraction == null || !isFinite(fraction)) return el("span", { class: "muted" }, "unknown");
+  const pct = Math.max(0, Math.min(1, fraction));
+  const level = pct >= 0.9 ? " bad" : pct >= 0.7 ? " warn" : "";
+  const fill = el("span"); fill.style.width = (pct * 100).toFixed(1) + "%";
+  return el("div", { class: "meter" }, el("div", { class: "bar" + level }, fill), el("span", {}, label));
+}
+
+function contextUse(promptTokens, contextLength) {
+  if (!promptTokens || !contextLength) return el("span", { class: "muted" }, "unknown");
+  const f = promptTokens / contextLength;
+  return meter(f, `${Math.round(f * 100)}% of ${fmt(contextLength)}`);
+}
+
+function duration(seconds) {
+  const d = Math.floor(seconds / 86400), h = Math.floor(seconds % 86400 / 3600), m = Math.floor(seconds % 3600 / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m ${seconds % 60}s`;
+}
+
+function fill(tbody, rows, columns, emptyText) {
+  tbody.replaceChildren(...(rows.length ? rows : [el("tr", {}, el("td", { class: "empty", colspan: columns }, emptyText))]));
+}
+
+function render(data) {
+  const { config, backend, models, stats, gpu } = data;
+
+  $("backend-dot").className = "dot " + (backend.reachable ? "ok" : "bad");
+  $("backend-text").textContent = backend.reachable
+    ? `Backend reachable · ${ms(backend.latencyMs)}`
+    : `Backend unreachable: ${backend.error ?? "unknown error"}`;
+  $("uptime").textContent = "Up " + duration(stats.uptimeSeconds);
+  $("updated").textContent = "Updated " + new Date().toLocaleTimeString();
+
+  const lastStream = stats.recent.find(r => r.tokensPerSecond != null);
+  $("t-requests").textContent = fmt(stats.requests);
+  $("t-errors").textContent = fmt(stats.errors);
+  $("t-prompt").textContent = fmt(stats.promptTokens);
+  $("t-completion").textContent = fmt(stats.completionTokens);
+  $("t-avg-tps").textContent = stats.avgTokensPerSecond == null ? "–" : stats.avgTokensPerSecond.toFixed(1);
+  $("t-last-tps").textContent = lastStream ? lastStream.tokensPerSecond.toFixed(1) : "–";
+
+  const configRows = [
+    ["Backend", config.targetUrl], ["Listening on", config.listen], ["Timeout", config.timeoutSeconds + " s"],
+    ["Console logging", config.logging ? "on" : "off"],
+    ["Dashboard access", config.dashboardAllowRemote ? "open to the network" : "this machine only"],
+    ["Proxy version", config.proxyVersion], ["Reported Ollama version", config.reportedOllamaVersion],
+  ];
+  $("config").replaceChildren(...configRows.flatMap(([k, v]) => [el("dt", {}, k), el("dd", {}, v)]));
+
+  if (!gpu || !gpu.length) {
+    $("gpu").replaceChildren(el("div", { class: "empty" },
+      "Not available. Needs an NVIDIA GPU with nvidia-smi on this machine; a backend on another machine can't be seen."));
+  } else {
+    $("gpu").replaceChildren(...gpu.map(g => {
+      const memFraction = g.memoryUsedMiB != null && g.memoryTotalMiB ? g.memoryUsedMiB / g.memoryTotalMiB : null;
+      return el("div", { class: "gpu" },
+        el("div", {}, el("strong", {}, g.name), g.temperatureC != null ? el("span", { class: "muted" }, ` · ${g.temperatureC} °C`) : null),
+        el("div", { class: "row" }, el("span", { class: "muted" }, "Load"),
+          meter(g.utilizationPercent == null ? null : g.utilizationPercent / 100, ""), el("span", {}, g.utilizationPercent == null ? "–" : g.utilizationPercent + "%")),
+        el("div", { class: "row" }, el("span", { class: "muted" }, "VRAM"),
+          meter(memFraction, ""), el("span", {}, `${fmt(g.memoryUsedMiB)} / ${fmt(g.memoryTotalMiB)} MiB`)));
+    }));
+  }
+
+  const lastByModel = new Map();
+  for (const r of stats.recent) if (r.model && r.promptTokens && !lastByModel.has(r.model)) lastByModel.set(r.model, r);
+  fill($("models"), models.map(m => {
+    const last = lastByModel.get(m.name);
+    return el("tr", {},
+      el("td", {}, m.name), el("td", {}, m.parameterSize ?? "–"), el("td", {}, m.quantization ?? "–"),
+      el("td", {}, (m.capabilities || []).map(c => el("span", { class: "chip" }, c))),
+      el("td", { class: "num" }, m.contextLength ? fmt(m.contextLength) : "unknown"),
+      el("td", {}, last ? contextUse(last.promptTokens, last.contextLength ?? m.contextLength) : el("span", { class: "muted" }, "–")));
+  }), 6, backend.reachable ? "The backend reports no models." : "Backend unreachable.");
+
+  fill($("requests"), stats.recent.map(r => el("tr", {},
+    el("td", {}, new Date(r.time).toLocaleTimeString()),
+    el("td", {}, `${r.method} ${r.endpoint}`),
+    el("td", {}, r.model ?? "–"),
+    r.error
+      ? el("td", { class: "status-bad error-cell", title: r.error }, `${r.status} · ${r.error}`)
+      : el("td", { class: r.status >= 400 ? "status-bad" : "status-ok" }, r.status),
+    el("td", { class: "num" }, ms(r.totalMs)),
+    el("td", { class: "num" }, ms(r.firstTokenMs)),
+    el("td", { class: "num" }, r.promptTokens == null && r.completionTokens == null ? "–" : `${fmt(r.promptTokens)} → ${fmt(r.completionTokens)}`),
+    el("td", { class: "num" }, r.tokensPerSecond == null ? "–" : r.tokensPerSecond.toFixed(1)),
+    el("td", {}, r.promptTokens ? contextUse(r.promptTokens, r.contextLength) : el("span", { class: "muted" }, "–"))
+  )), 9, "No requests yet.");
+
+  fill($("endpoints"), stats.endpoints.map(e => el("tr", {},
+    el("td", {}, e.endpoint), el("td", { class: "num" }, fmt(e.count)),
+    el("td", { class: "num" + (e.errors ? " status-bad" : "") }, fmt(e.errors)))), 3, "No requests yet.");
+}
+
+let timer;
+async function refresh() {
+  clearTimeout(timer);
+  if (!document.hidden) {
+    try {
+      const resp = await fetch("/dashboard/api/stats", { cache: "no-store" });
+      if (!resp.ok) throw new Error(resp.status);
+      render(await resp.json());
+      $("banner").style.display = "none";
+    } catch {
+      $("banner").style.display = "block";
+    }
+  }
+  timer = setTimeout(refresh, 2000);
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+refresh();
+</script>
+</body>
+</html>

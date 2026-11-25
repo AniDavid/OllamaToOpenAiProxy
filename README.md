@@ -122,7 +122,13 @@ OpenAI-Compatible Backend (LM Studio, FreeToken, vLLM, llama.cpp, etc.)
 - **FreeToken / Other**: Ensure your endpoint URL and API access are available.
 
 ### 2. Start OllamaToOpenAiProxy
-Download the release binary or run from source:
+On Windows, install with winget (then run `ollama-openai-proxy`):
+
+```powershell
+winget install AniDavid.OllamaToOpenAiProxy
+```
+
+Or download the release binary or run from source:
 
 ```bash
 # Run executable
@@ -145,7 +151,14 @@ By default, the proxy listens on `http://0.0.0.0:11434` and forwards requests to
 
 ## Configuration
 
-Configuration can be customized via `appsettings.json`, environment variables, or `.env` files.
+Configuration can be customized via `appsettings.json`, environment variables, or command-line arguments (e.g. `--ProxySettings:ProxyPort=11500`).
+
+`appsettings.json` is read from these locations; later ones win:
+
+1. The install folder, next to the executable (for winget: `%LOCALAPPDATA%\Microsoft\WinGet\Packages\AniDavid.OllamaToOpenAiProxy_*`)
+2. `%APPDATA%\OllamaToOpenAiProxy\appsettings.json`: **use this for winget installs**, since `winget upgrade` replaces the install folder
+
+Environment variables and command-line arguments override all of these.
 
 ### `appsettings.json` Example
 
@@ -178,6 +191,32 @@ Configuration can be customized via `appsettings.json`, environment variables, o
 | `PROXY_PORT` | `ProxySettings:ProxyPort` | `11434` | Port the proxy listens on |
 | `TIMEOUT_SECONDS`| `ProxySettings:TimeoutSeconds` | `600` | HTTP request timeout in seconds |
 | `ENABLE_LOGGING` | `ProxySettings:EnableLogging` | `true` | Enables console request/response logging |
+| `ENABLE_DASHBOARD` | `ProxySettings:EnableDashboard` | `true` | Serves the dashboard at `/dashboard` |
+| `DASHBOARD_ALLOW_REMOTE` | `ProxySettings:DashboardAllowRemote` | `false` | Lets other machines open the dashboard (otherwise this machine only) |
+
+These variables take priority over every `appsettings.json` and over command-line arguments. The standard .NET form (`ProxySettings__OpenAiUrl`, `ProxySettings__ProxyPort`, …) also works.
+
+---
+
+## Dashboard
+
+Open **http://localhost:11434/dashboard** in a browser while the proxy runs. It refreshes every 2 seconds and shows:
+
+- **Status & configuration**: whether the backend is reachable (and how fast), backend URL, port, timeout, versions
+- **Totals since start**: requests, errors, prompt and completion tokens, average and latest tokens/second
+- **Models**: what the backend reports, with capabilities (tools, vision, thinking, embedding) and context window size
+- **Recent requests** (last 200): endpoint, model, status, total time, time to first token, tokens in → out, tokens/second, and how much of the context window the prompt used
+- **GPU**: load, VRAM and temperature
+
+By default only this machine can open it; set `DASHBOARD_ALLOW_REMOTE=true` to allow other machines, or `ENABLE_DASHBOARD=false` to turn it off.
+
+Good to know:
+- Stats live in memory and reset when the proxy restarts. No prompt or response text is stored.
+- Token counts and tokens/second are measured for both the Ollama endpoints (`/api/*`) and the OpenAI endpoints (`/v1/*`, which Visual Studio uses). Tokens/second needs a streaming request.
+- Errors a backend reports inside a stream (for example LM Studio's "request exceeds the available context size") are shown and counted as errors, even though the HTTP status was 200. They are also written to the console log.
+- Context window size is shown when the backend reports it (LM Studio and vLLM do).
+- GPU stats need an NVIDIA GPU with `nvidia-smi` on the machine running the proxy; a backend on another machine can't be seen.
+- The dashboard costs nothing while closed. While open, it adds a few small, cached backend calls and one `nvidia-smi` run every few seconds.
 
 ---
 

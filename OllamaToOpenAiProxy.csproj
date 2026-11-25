@@ -4,10 +4,12 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <DefaultItemExcludes>$(DefaultItemExcludes);Tests\**</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);Tests\**;publish\**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>
+    <Content Update="appsettings.Development.json" CopyToPublishDirectory="Never" />
+    <EmbeddedResource Include="dashboard.html" LogicalName="OllamaToOpenAiProxy.dashboard.html" />
     <InternalsVisibleTo Include="OllamaToOpenAiProxy.Tests" />
   </ItemGroup>
 
