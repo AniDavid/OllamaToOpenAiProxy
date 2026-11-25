@@ -109,6 +109,13 @@ OpenAI-Compatible Backend (LM Studio, FreeToken, vLLM, llama.cpp, etc.)
 | `POST` | `/v1/completions` | OpenAI text completions (SSE streaming & JSON) |
 | `POST` | `/v1/embeddings` | OpenAI vector embeddings |
 
+### 3. Dashboard
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/dashboard` | Web page with live status, stats and models ([details](#dashboard)) |
+| `GET` | `/dashboard/api/stats` | The page's data as JSON |
+
 ---
 
 ## Quick Start
@@ -136,6 +143,7 @@ Or download the release binary or run from source:
 ```
 
 By default, the proxy listens on `http://0.0.0.0:11434` and forwards requests to `http://localhost:1234`.
+To see what it's doing, open the [dashboard](#dashboard) at **http://localhost:11434/dashboard**.
 
 ### 3. Configure Your Application
 
@@ -202,19 +210,21 @@ These variables take priority over every `appsettings.json` and over command-lin
 
 Open **http://localhost:11434/dashboard** in a browser while the proxy runs. It refreshes every 0.5 seconds (GPU stats, backend status and the model list every second) and shows:
 
-- **Status & configuration**: whether the backend is reachable (and how fast), backend URL, port, timeout, versions
+- **Status**: whether the backend is reachable (and how fast), and which models it has loaded in memory
 - **Totals since start**: requests, errors, prompt and completion tokens, average and latest tokens/second
-- **Models**: what the backend reports, with capabilities (tools, vision, thinking, embedding) and context window size
-- **Recent requests** (last 200): endpoint, model, status, total time, time to first token, tokens in → out, tokens/second, and how much of the context window the prompt used
+- **Configuration**: backend URL, port, timeout, versions
 - **GPU**: load, VRAM and temperature
+- **Recent requests** (last 200): endpoint, model, status, total time, time to first token, tokens in → out, tokens/second, and how much of the context window the prompt used
+- **Endpoints**: requests and errors per endpoint
+- **Models** (collapsed; click to open): what the backend reports, with capabilities (tools, vision, thinking, embedding) and context window size
 
-By default only this machine can open it; set `DASHBOARD_ALLOW_REMOTE=true` to allow other machines, or `ENABLE_DASHBOARD=false` to turn it off.
+By default only this machine can open it, at `localhost`, `127.0.0.1` or `[::1]`. Set `DASHBOARD_ALLOW_REMOTE=true` to allow other machines (and other host names, such as the PC's name), or `ENABLE_DASHBOARD=false` to turn it off.
 
 Good to know:
 - Stats live in memory and reset when the proxy restarts. No prompt or response text is stored.
 - Token counts and tokens/second are measured for both the Ollama endpoints (`/api/*`) and the OpenAI endpoints (`/v1/*`, which Visual Studio uses). Tokens/second needs a streaming request.
 - Errors a backend reports inside a stream (for example LM Studio's "request exceeds the available context size") are shown and counted as errors, even though the HTTP status was 200. They are also written to the console log.
-- Context window size is shown when the backend reports it (LM Studio and vLLM do).
+- Context window size is shown when the backend reports it (LM Studio and vLLM do). Loaded models are shown for LM Studio; other backends don't report them.
 - GPU stats need an NVIDIA GPU with `nvidia-smi` on the machine running the proxy; a backend on another machine can't be seen.
 - The dashboard costs nothing while closed. While open, it makes two small backend calls (status and model list) and one `nvidia-smi` run per second.
 
@@ -289,6 +299,7 @@ dotnet run --project OllamaToOpenAiProxy.csproj
 This application is designed for local development and proxying:
 - To restrict access strictly to the local machine, set `ProxyHost` to `127.0.0.1`.
 - Do not expose the proxy directly to public untrusted networks without appropriate reverse-proxy authentication, rate limiting, and TLS termination.
+- The dashboard answers only this machine by default and rejects other host names, so a website can't read it through DNS rebinding. It never stores prompt or response text.
 
 ---
 
