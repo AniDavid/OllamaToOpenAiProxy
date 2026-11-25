@@ -52,6 +52,8 @@
   .gpu .row { display: grid; grid-template-columns: 60px 1fr 110px; gap: 8px; align-items: center; margin-top: 6px; }
   .banner { display: none; padding: 10px 14px; border-radius: 8px; background: var(--bad); color: #fff; margin-bottom: 14px; }
   .empty { color: var(--muted); padding: 8px 0; }
+  summary { cursor: pointer; } summary h2 { display: inline; margin: 0; }
+  details[open] > summary { margin-bottom: 10px; }
   footer { color: var(--muted); font-size: 12px; margin-top: 8px; }
 </style>
 </head>
@@ -60,6 +62,7 @@
   <header>
     <h1>OllamaToOpenAiProxy</h1>
     <span class="pill"><span class="dot" id="backend-dot"></span><span id="backend-text">Checking backend…</span></span>
+    <span class="pill" title="Models the backend has loaded in memory"><span class="muted">Loaded</span><strong id="loaded-models">–</strong></span>
     <span class="spacer"></span>
     <span class="muted" id="uptime"></span>
     <span class="muted" id="updated"></span>
@@ -82,14 +85,6 @@
   </div>
 
   <section class="card">
-    <h2>Models</h2>
-    <div class="scroll"><table>
-      <thead><tr><th>Name</th><th>Size</th><th>Quant</th><th>Capabilities</th><th class="num">Context</th><th>Last context use</th></tr></thead>
-      <tbody id="models"></tbody>
-    </table></div>
-  </section>
-
-  <section class="card">
     <h2>Recent requests</h2>
     <div class="scroll"><table>
       <thead><tr><th>Time</th><th>Endpoint</th><th>Model</th><th>Status</th><th class="num">Total</th><th class="num">First token</th>
@@ -105,6 +100,14 @@
       <tbody id="endpoints"></tbody>
     </table></div>
   </section>
+
+  <details class="card">
+    <summary><h2>Models</h2></summary>
+    <div class="scroll"><table>
+      <thead><tr><th>Name</th><th>Size</th><th>Quant</th><th>Capabilities</th><th class="num">Context</th><th>Last context use</th></tr></thead>
+      <tbody id="models"></tbody>
+    </table></div>
+  </details>
 
   <footer>
     Stats are kept in memory since the proxy started (last 200 requests). No prompt or response text is stored.
@@ -160,6 +163,10 @@ function render(data) {
     : `Backend unreachable: ${backend.error ?? "unknown error"}`;
   $("uptime").textContent = "Up " + duration(stats.uptimeSeconds);
   $("updated").textContent = "Updated " + new Date().toLocaleTimeString();
+
+  const loaded = models.filter(m => m.loaded).map(m => m.name);
+  $("loaded-models").textContent = loaded.length ? loaded.join(", ")
+    : models.some(m => m.loaded === false) ? "none" : "not reported by backend";
 
   const lastStream = stats.recent.find(r => r.tokensPerSecond != null);
   $("t-requests").textContent = fmt(stats.requests);
@@ -235,7 +242,7 @@ async function refresh() {
       $("banner").style.display = "block";
     }
   }
-  timer = setTimeout(refresh, 2000);
+  timer = setTimeout(refresh, 500);
 }
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
 refresh();

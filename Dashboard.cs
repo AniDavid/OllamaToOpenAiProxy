@@ -40,9 +40,9 @@ internal static class Dashboard
         bool allowRemote)
     {
         // Everything below runs only when the page asks, and is cached so an open page adds little load.
-        var models = new Cached<List<JsonObject>>(TimeSpan.FromSeconds(30), getModels);
-        var probe = new Cached<JsonObject>(TimeSpan.FromSeconds(5), () => ProbeAsync(backend));
-        var gpu = new Cached<JsonArray?>(TimeSpan.FromSeconds(3), () => Task.Run(GpuStats.Read));
+        var models = new Cached<List<JsonObject>>(TimeSpan.FromSeconds(1), getModels); // 1 s so "Loaded" follows LM Studio closely
+        var probe = new Cached<JsonObject>(TimeSpan.FromSeconds(1), () => ProbeAsync(backend));
+        var gpu = new Cached<JsonArray?>(TimeSpan.FromSeconds(1), () => Task.Run(GpuStats.Read));
 
         string version = typeof(Dashboard).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
             .InformationalVersion.Split('+')[0] ?? "unknown";
@@ -72,6 +72,8 @@ internal static class Dashboard
                     ["quantization"] = Reported((m["quantization"] as JsonObject)?["name"] ?? m["quantization"] as JsonValue),
                     ["capabilities"] = converted["capabilities"]?.DeepClone(),
                     ["contextLength"] = RequestMetrics.ModelContextLength(m),
+                    // LM Studio lists loaded copies in loaded_instances; null when the backend doesn't say.
+                    ["loaded"] = m["loaded_instances"] is JsonArray instances ? instances.Count > 0 : null,
                 });
             }
 

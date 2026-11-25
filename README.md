@@ -200,7 +200,7 @@ These variables take priority over every `appsettings.json` and over command-lin
 
 ## Dashboard
 
-Open **http://localhost:11434/dashboard** in a browser while the proxy runs. It refreshes every 2 seconds and shows:
+Open **http://localhost:11434/dashboard** in a browser while the proxy runs. It refreshes every 0.5 seconds (GPU stats, backend status and the model list every second) and shows:
 
 - **Status & configuration**: whether the backend is reachable (and how fast), backend URL, port, timeout, versions
 - **Totals since start**: requests, errors, prompt and completion tokens, average and latest tokens/second
@@ -216,7 +216,7 @@ Good to know:
 - Errors a backend reports inside a stream (for example LM Studio's "request exceeds the available context size") are shown and counted as errors, even though the HTTP status was 200. They are also written to the console log.
 - Context window size is shown when the backend reports it (LM Studio and vLLM do).
 - GPU stats need an NVIDIA GPU with `nvidia-smi` on the machine running the proxy; a backend on another machine can't be seen.
-- The dashboard costs nothing while closed. While open, it adds a few small, cached backend calls and one `nvidia-smi` run every few seconds.
+- The dashboard costs nothing while closed. While open, it makes two small backend calls (status and model list) and one `nvidia-smi` run per second.
 
 ---
 
