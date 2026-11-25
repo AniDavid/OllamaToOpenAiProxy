@@ -9,6 +9,6 @@ NestedInstallerFiles:
 Installers:
 - Architecture: x64
   InstallerUrl: https://github.com/AniDavid/OllamaToOpenAiProxy/releases/download/v0.6.5/OllamaToOpenAiProxy-win-x64.zip
-  InstallerSha256: FILL_IN_AFTER_v0.6.5_RELEASE
+  InstallerSha256: E1A389DF30700C6D2527F8C78ACC04A0C49A9EA76CBDE550F9FFD3A80964AA28
 ManifestType: installer
 ManifestVersion: 1.10.0
